@@ -1,8 +1,8 @@
 from typing import Callable
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QPainter, QPen, QColor
-from PySide6.QtWidgets import QGraphicsScene, QGraphicsView
+from PySide6.QtCore import Qt, QPointF
+from PySide6.QtGui import QPainter, QPen, QColor, QPainterPath
+from PySide6.QtWidgets import QGraphicsPathItem, QGraphicsScene, QGraphicsView
 
 from platform_item import PlatformItem
 
@@ -15,7 +15,11 @@ class MapView(QGraphicsView):
 
         self.on_platform_selected = on_platform_selected
         self.platform_items: dict[str, PlatformItem] = {}
+        self.track_items: dict[str, QGraphicsPathItem] = {}
+        self.track_history: dict[str, list[QPointF]] = {}
         self.selected_platform_id: str | None = None
+        self.show_tracks = True
+        self.max_track_points = 120
 
         self.scene = QGraphicsScene(self)
         self.scene.setSceneRect(-400, -300, 800, 600)
@@ -61,6 +65,17 @@ class MapView(QGraphicsView):
         self.platform_items[platform_info["id"]] = item
         self.scene.addItem(item)
 
+        track_item = QGraphicsPathItem()
+        track_pen = QPen(item.get_track_color(), 1.8)
+        track_item.setPen(track_pen)
+        self.scene.addItem(track_item)
+        track_item.setZValue(-1)
+
+        self.track_items[platform_info["id"]] = track_item
+        self.track_history[platform_info["id"]] = [
+            QPointF(platform_info["x"], platform_info["y"])
+        ]
+
     def update_platform(self, platform_info: dict) -> None:
         platform_id = platform_info["id"]
         if platform_id not in self.platform_items:
@@ -74,6 +89,30 @@ class MapView(QGraphicsView):
             z=platform_info["z"],
         )
 
+        self._update_track(platform_id, platform_info["x"], platform_info["y"])
+
+    def _update_track(self, platform_id: str, x: float, y: float) -> None:
+        if platform_id not in self.track_history:
+            self.track_history[platform_id] = []
+
+        history = self.track_history[platform_id]
+        history.append(QPointF(x, y))
+
+        if len(history) > self.max_track_points:
+            history.pop(0)
+
+        track_item = self.track_items[platform_id]
+        if not self.show_tracks or len(history) < 2:
+            track_item.setPath(QPainterPath())
+            return
+
+        path = QPainterPath()
+        path.moveTo(history[0])
+        for point in history[1:]:
+            path.lineTo(point)
+
+        track_item.setPath(path)
+
     def update_platforms(self, platform_list: list[dict]) -> None:
         for platform_info in platform_list:
             self.update_platform(platform_info)
@@ -85,6 +124,26 @@ class MapView(QGraphicsView):
             item.set_selected(pid == self.selected_platform_id)
 
         self.on_platform_selected(platform_info)
+
+    def set_show_tracks(self, show: bool) -> None:
+        self.show_tracks = show
+        for platform_id, item in self.track_items.items():
+            if not show:
+                item.setPath(QPainterPath())
+            else:
+                history = self.track_history.get(platform_id, [])
+                if len(history) >= 2:
+                    path = QPainterPath()
+                    path.moveTo(history[0])
+                    for point in history[1:]:
+                        path.lineTo(point)
+                    item.setPath(path)
+
+    def clear_tracks(self) -> None:
+        for platform_id in self.track_history:
+            current_item = self.platform_items[platform_id]
+            self.track_history[platform_id] = [QPointF(current_item.x_val, current_item.y_val)]
+            self.track_items[platform_id].setPath(QPainterPath())
 
     def wheelEvent(self, event) -> None:
         zoom_factor = 1.15

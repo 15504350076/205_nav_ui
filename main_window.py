@@ -1,5 +1,6 @@
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -36,7 +37,7 @@ class MainWindow(QMainWindow):
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.on_timer_update)
-        self.timer.start(100)  # 100 ms 刷新一次
+        self.timer.start(100)
 
         self._init_ui()
         self._load_initial_data()
@@ -47,10 +48,8 @@ class MainWindow(QMainWindow):
 
         main_layout = QHBoxLayout(central_widget)
 
-        # 中间态势图
         main_layout.addWidget(self.map_view, 4)
 
-        # 右侧信息区
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
 
@@ -62,11 +61,24 @@ class MainWindow(QMainWindow):
         form_layout.addRow("Y 坐标:", self.y_label)
         form_layout.addRow("Z 坐标:", self.z_label)
 
+        display_group = QGroupBox("显示控制")
+        display_layout = QVBoxLayout(display_group)
+
+        self.track_checkbox = QCheckBox("显示轨迹")
+        self.track_checkbox.setChecked(True)
+        self.track_checkbox.toggled.connect(self.map_view.set_show_tracks)
+        display_layout.addWidget(self.track_checkbox)
+
+        clear_track_button = QPushButton("清除轨迹")
+        clear_track_button.clicked.connect(self.map_view.clear_tracks)
+        display_layout.addWidget(clear_track_button)
+
         help_group = QGroupBox("操作提示")
         help_layout = QVBoxLayout(help_group)
         help_layout.addWidget(QLabel("1. 鼠标左键点击亮点可选中平台"))
         help_layout.addWidget(QLabel("2. 鼠标滚轮可缩放视图"))
         help_layout.addWidget(QLabel("3. 按键 R 可恢复默认缩放"))
+        help_layout.addWidget(QLabel("4. 可勾选显示或隐藏轨迹"))
 
         button_group = QGroupBox("控制")
         button_layout = QVBoxLayout(button_group)
@@ -84,6 +96,7 @@ class MainWindow(QMainWindow):
         button_layout.addWidget(about_button)
 
         right_layout.addWidget(info_group)
+        right_layout.addWidget(display_group)
         right_layout.addWidget(help_group)
         right_layout.addWidget(button_group)
         right_layout.addStretch()
@@ -98,7 +111,6 @@ class MainWindow(QMainWindow):
         platform_data = self.data_generator.get_next_frame()
         self.map_view.update_platforms(platform_data)
 
-        # 如果当前有选中目标，则同步刷新右侧坐标
         if self.map_view.selected_platform_id is not None:
             selected_id = self.map_view.selected_platform_id
             for platform in platform_data:
@@ -123,10 +135,11 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "关于",
-            "205_nav_ui 最小可运行原型\n\n"
-            "功能：\n"
+            "205_nav_ui 原型（第二步）\n\n"
+            "当前功能：\n"
             "- 多个平台亮点显示\n"
             "- 鼠标点击选中高亮\n"
             "- 右侧显示平台坐标\n"
-            "- 假数据定时刷新",
+            "- 假数据定时刷新\n"
+            "- 历史轨迹显示与清除",
         )

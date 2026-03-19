@@ -80,6 +80,11 @@ class PlatformItem(QGraphicsEllipseItem):
             "z": self.z_val,
         }
 
+    def get_track_color(self) -> QColor:
+        if self.platform_type.upper() == "UAV":
+            return QColor(80, 200, 255)
+        return QColor(255, 170, 60)
+
     def mousePressEvent(self, event) -> None:
         if self.on_selected is not None:
             self.on_selected(self.get_info())
