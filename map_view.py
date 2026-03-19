@@ -1,10 +1,17 @@
 from typing import Callable
 
 from PySide6.QtCore import Qt, QPointF
-from PySide6.QtGui import QPainter, QPen, QColor, QPainterPath
-from PySide6.QtWidgets import QGraphicsPathItem, QGraphicsScene, QGraphicsView
+from PySide6.QtGui import QPainter, QPen, QColor, QPainterPath, QBrush
+from PySide6.QtWidgets import (
+    QGraphicsEllipseItem,
+    QGraphicsPathItem,
+    QGraphicsRectItem,
+    QGraphicsScene,
+    QGraphicsSimpleTextItem,
+    QGraphicsView,
+)
 
-from platform_item import PlatformItem
+from platform_item import create_platform_item
 
 
 class MapView(QGraphicsView):
@@ -14,12 +21,15 @@ class MapView(QGraphicsView):
         super().__init__()
 
         self.on_platform_selected = on_platform_selected
-        self.platform_items: dict[str, PlatformItem] = {}
+        self.platform_items: dict[str, object] = {}
         self.latest_platform_info: dict[str, dict] = {}
         self.track_items: dict[str, QGraphicsPathItem] = {}
         self.track_history: dict[str, list[QPointF]] = {}
         self.selected_platform_id: str | None = None
         self.show_tracks = True
+        self.show_labels = True
+        self.follow_selected = False
+        self.lock_pan_when_follow = True
         self.max_track_points = 120
 
         self.scene = QGraphicsScene(self)
@@ -27,8 +37,41 @@ class MapView(QGraphicsView):
         self.setScene(self.scene)
 
         self.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self._update_drag_mode()
         self.setBackgroundBrush(QColor(35, 35, 35))
+
+        self._add_legend()
+
+    def _add_legend(self) -> None:
+        legend_x = -380
+        legend_y = -280
+
+        title = QGraphicsSimpleTextItem("图例")
+        title.setBrush(QBrush(QColor(230, 230, 230)))
+        title.setPos(legend_x, legend_y)
+        self.scene.addItem(title)
+
+        uav_shape = QGraphicsEllipseItem(0, 0, 14, 14)
+        uav_shape.setBrush(QBrush(QColor(80, 200, 255)))
+        uav_shape.setPen(QPen(QColor(30, 30, 30), 1.0))
+        uav_shape.setPos(legend_x, legend_y + 25)
+        self.scene.addItem(uav_shape)
+
+        uav_text = QGraphicsSimpleTextItem("UAV")
+        uav_text.setBrush(QBrush(QColor(230, 230, 230)))
+        uav_text.setPos(legend_x + 22, legend_y + 22)
+        self.scene.addItem(uav_text)
+
+        ugv_shape = QGraphicsRectItem(0, 0, 14, 14)
+        ugv_shape.setBrush(QBrush(QColor(255, 170, 60)))
+        ugv_shape.setPen(QPen(QColor(30, 30, 30), 1.0))
+        ugv_shape.setPos(legend_x, legend_y + 50)
+        self.scene.addItem(ugv_shape)
+
+        ugv_text = QGraphicsSimpleTextItem("UGV")
+        ugv_text.setBrush(QBrush(QColor(230, 230, 230)))
+        ugv_text.setPos(legend_x + 22, legend_y + 47)
+        self.scene.addItem(ugv_text)
 
     def drawBackground(self, painter: QPainter, rect) -> None:
         super().drawBackground(painter, rect)
@@ -55,7 +98,7 @@ class MapView(QGraphicsView):
         painter.drawLine(left, 0, right, 0)
 
     def add_platform(self, platform_info: dict) -> None:
-        item = PlatformItem(
+        item = create_platform_item(
             platform_id=platform_info["id"],
             platform_type=platform_info["type"],
             x=platform_info["x"],
@@ -63,6 +106,8 @@ class MapView(QGraphicsView):
             z=platform_info["z"],
             on_selected=self.select_platform,
         )
+        item.set_label_visible(self.show_labels)
+
         self.platform_items[platform_info["id"]] = item
         self.latest_platform_info[platform_info["id"]] = platform_info.copy()
         self.scene.addItem(item)
@@ -119,6 +164,8 @@ class MapView(QGraphicsView):
     def update_platforms(self, platform_list: list[dict]) -> None:
         for platform_info in platform_list:
             self.update_platform(platform_info)
+        if self.follow_selected:
+            self._center_on_selected()
 
     def select_platform(self, platform_info: dict) -> None:
         self.selected_platform_id = platform_info["id"]
@@ -128,6 +175,8 @@ class MapView(QGraphicsView):
 
         latest_info = self.latest_platform_info.get(platform_info["id"], platform_info)
         self.on_platform_selected(latest_info)
+        if self.follow_selected:
+            self._center_on_selected()
 
     def set_show_tracks(self, show: bool) -> None:
         self.show_tracks = show
@@ -142,6 +191,21 @@ class MapView(QGraphicsView):
                     for point in history[1:]:
                         path.lineTo(point)
                     item.setPath(path)
+
+    def set_show_labels(self, show: bool) -> None:
+        self.show_labels = show
+        for item in self.platform_items.values():
+            item.set_label_visible(show)
+
+    def set_follow_selected(self, follow: bool) -> None:
+        self.follow_selected = follow
+        self._update_drag_mode()
+        if self.follow_selected:
+            self._center_on_selected()
+
+    def set_lock_pan_when_follow(self, lock: bool) -> None:
+        self.lock_pan_when_follow = lock
+        self._update_drag_mode()
 
     def clear_tracks(self) -> None:
         for platform_id in self.track_history:
@@ -167,3 +231,17 @@ class MapView(QGraphicsView):
             event.accept()
             return
         super().keyPressEvent(event)
+
+    def _center_on_selected(self) -> None:
+        if self.selected_platform_id is None:
+            return
+        item = self.platform_items.get(self.selected_platform_id)
+        if item is None:
+            return
+        self.centerOn(item)
+
+    def _update_drag_mode(self) -> None:
+        if self.follow_selected and self.lock_pan_when_follow:
+            self.setDragMode(QGraphicsView.DragMode.NoDrag)
+            return
+        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)

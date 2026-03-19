@@ -2,11 +2,23 @@ from typing import Callable, Optional
 
 from PySide6.QtCore import Qt, QRectF
 from PySide6.QtGui import QBrush, QPen, QColor
-from PySide6.QtWidgets import QGraphicsEllipseItem, QGraphicsSimpleTextItem
+from PySide6.QtWidgets import QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsSimpleTextItem
+
+
+def _fill_color(platform_type: str) -> QColor:
+    if platform_type.upper() == "UAV":
+        return QColor(80, 200, 255)
+    return QColor(255, 170, 60)
+
+
+def _outline_pen(selected: bool) -> QPen:
+    if selected:
+        return QPen(QColor(255, 255, 0), 2.5)
+    return QPen(QColor(30, 30, 30), 1.2)
 
 
 class PlatformItem(QGraphicsEllipseItem):
-    """界面中的单个平台亮点对象。"""
+    """UAV 图元：圆形。"""
 
     NORMAL_RADIUS = 8.0
     SELECTED_RADIUS = 12.0
@@ -47,23 +59,16 @@ class PlatformItem(QGraphicsEllipseItem):
         self.setPos(self.x_val, self.y_val)
 
     def _update_style(self) -> None:
-        if self.platform_type.upper() == "UAV":
-            fill_color = QColor(80, 200, 255)
-        else:
-            fill_color = QColor(255, 170, 60)
-
-        if self.is_selected_flag:
-            pen = QPen(QColor(255, 255, 0), 2.5)
-        else:
-            pen = QPen(QColor(30, 30, 30), 1.2)
-
-        self.setBrush(QBrush(fill_color))
-        self.setPen(pen)
+        self.setBrush(QBrush(_fill_color(self.platform_type)))
+        self.setPen(_outline_pen(self.is_selected_flag))
 
     def set_selected(self, selected: bool) -> None:
         self.is_selected_flag = selected
         self._update_geometry()
         self._update_style()
+
+    def set_label_visible(self, visible: bool) -> None:
+        self.label_item.setVisible(visible)
 
     def update_state(self, x: float, y: float, z: float) -> None:
         self.x_val = x
@@ -81,11 +86,113 @@ class PlatformItem(QGraphicsEllipseItem):
         }
 
     def get_track_color(self) -> QColor:
-        if self.platform_type.upper() == "UAV":
-            return QColor(80, 200, 255)
-        return QColor(255, 170, 60)
+        return _fill_color(self.platform_type)
 
     def mousePressEvent(self, event) -> None:
         if self.on_selected is not None:
             self.on_selected(self.get_info())
         super().mousePressEvent(event)
+
+
+class UGVPlatformItem(QGraphicsRectItem):
+    """UGV 图元：方形。"""
+
+    NORMAL_HALF_SIZE = 8.0
+    SELECTED_HALF_SIZE = 12.0
+
+    def __init__(
+        self,
+        platform_id: str,
+        platform_type: str,
+        x: float,
+        y: float,
+        z: float,
+        on_selected: Optional[Callable[[dict], None]] = None,
+    ) -> None:
+        super().__init__()
+        self.platform_id = platform_id
+        self.platform_type = platform_type
+        self.x_val = x
+        self.y_val = y
+        self.z_val = z
+        self.on_selected = on_selected
+        self.is_selected_flag = False
+
+        self.setFlag(QGraphicsRectItem.GraphicsItemFlag.ItemIsSelectable, True)
+        self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
+
+        self._setup_label()
+        self._update_geometry()
+        self._update_style()
+
+    def _setup_label(self) -> None:
+        self.label_item = QGraphicsSimpleTextItem(self.platform_id, self)
+        self.label_item.setBrush(QBrush(QColor(230, 230, 230)))
+        self.label_item.setPos(10, -22)
+
+    def _update_geometry(self) -> None:
+        half_size = self.SELECTED_HALF_SIZE if self.is_selected_flag else self.NORMAL_HALF_SIZE
+        self.setRect(QRectF(-half_size, -half_size, 2 * half_size, 2 * half_size))
+        self.setPos(self.x_val, self.y_val)
+
+    def _update_style(self) -> None:
+        self.setBrush(QBrush(_fill_color(self.platform_type)))
+        self.setPen(_outline_pen(self.is_selected_flag))
+
+    def set_selected(self, selected: bool) -> None:
+        self.is_selected_flag = selected
+        self._update_geometry()
+        self._update_style()
+
+    def set_label_visible(self, visible: bool) -> None:
+        self.label_item.setVisible(visible)
+
+    def update_state(self, x: float, y: float, z: float) -> None:
+        self.x_val = x
+        self.y_val = y
+        self.z_val = z
+        self.setPos(self.x_val, self.y_val)
+
+    def get_info(self) -> dict:
+        return {
+            "id": self.platform_id,
+            "type": self.platform_type,
+            "x": self.x_val,
+            "y": self.y_val,
+            "z": self.z_val,
+        }
+
+    def get_track_color(self) -> QColor:
+        return _fill_color(self.platform_type)
+
+    def mousePressEvent(self, event) -> None:
+        if self.on_selected is not None:
+            self.on_selected(self.get_info())
+        super().mousePressEvent(event)
+
+
+def create_platform_item(
+    platform_id: str,
+    platform_type: str,
+    x: float,
+    y: float,
+    z: float,
+    on_selected: Optional[Callable[[dict], None]] = None,
+):
+    if platform_type.upper() == "UGV":
+        return UGVPlatformItem(
+            platform_id=platform_id,
+            platform_type=platform_type,
+            x=x,
+            y=y,
+            z=z,
+            on_selected=on_selected,
+        )
+    return PlatformItem(
+        platform_id=platform_id,
+        platform_type=platform_type,
+        x=x,
+        y=y,
+        z=z,
+        on_selected=on_selected,
+    )

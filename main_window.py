@@ -54,7 +54,6 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
 
         main_layout = QHBoxLayout(central_widget)
-
         main_layout.addWidget(self.map_view, 4)
 
         right_panel = QWidget()
@@ -73,10 +72,26 @@ class MainWindow(QMainWindow):
         display_group = QGroupBox("显示控制")
         display_layout = QVBoxLayout(display_group)
 
+        self.follow_checkbox = QCheckBox("跟随选中目标")
+        self.follow_checkbox.setChecked(False)
+        self.follow_checkbox.toggled.connect(self.on_follow_toggled)
+        display_layout.addWidget(self.follow_checkbox)
+
+        self.follow_lock_checkbox = QCheckBox("跟随时禁用拖拽")
+        self.follow_lock_checkbox.setChecked(True)
+        self.follow_lock_checkbox.setEnabled(False)
+        self.follow_lock_checkbox.toggled.connect(self.map_view.set_lock_pan_when_follow)
+        display_layout.addWidget(self.follow_lock_checkbox)
+
         self.track_checkbox = QCheckBox("显示轨迹")
         self.track_checkbox.setChecked(True)
         self.track_checkbox.toggled.connect(self.map_view.set_show_tracks)
         display_layout.addWidget(self.track_checkbox)
+
+        self.label_checkbox = QCheckBox("显示编号")
+        self.label_checkbox.setChecked(True)
+        self.label_checkbox.toggled.connect(self.map_view.set_show_labels)
+        display_layout.addWidget(self.label_checkbox)
 
         clear_track_button = QPushButton("清除轨迹")
         clear_track_button.clicked.connect(self.map_view.clear_tracks)
@@ -84,10 +99,12 @@ class MainWindow(QMainWindow):
 
         help_group = QGroupBox("操作提示")
         help_layout = QVBoxLayout(help_group)
-        help_layout.addWidget(QLabel("1. 鼠标左键点击亮点可选中平台"))
-        help_layout.addWidget(QLabel("2. 鼠标滚轮可缩放视图"))
-        help_layout.addWidget(QLabel("3. 按键 R 可恢复默认缩放"))
-        help_layout.addWidget(QLabel("4. 可勾选显示或隐藏轨迹"))
+        help_layout.addWidget(QLabel("1. 鼠标左键点击平台可选中"))
+        help_layout.addWidget(QLabel("2. UAV 用圆点表示"))
+        help_layout.addWidget(QLabel("3. UGV 用方块表示"))
+        help_layout.addWidget(QLabel("4. 鼠标滚轮可缩放，按 R 复位"))
+        help_layout.addWidget(QLabel("5. 可开启跟随选中目标"))
+        help_layout.addWidget(QLabel("6. 跟随时可禁用手动拖拽"))
 
         button_group = QGroupBox("控制")
         button_layout = QVBoxLayout(button_group)
@@ -143,6 +160,10 @@ class MainWindow(QMainWindow):
         self.timer.stop()
         self.status_bar.showMessage("已暂停刷新")
 
+    def on_follow_toggled(self, enabled: bool) -> None:
+        self.map_view.set_follow_selected(enabled)
+        self.follow_lock_checkbox.setEnabled(enabled)
+
     def resume_updates(self) -> None:
         self.timer.start(100)
         selected_info = self.map_view.get_selected_platform_info()
@@ -155,12 +176,14 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "关于",
-            "205_nav_ui 原型（第三步）\n\n"
+            "205_nav_ui 原型（第六步）\n\n"
             "当前功能：\n"
-            "- 多个平台亮点显示\n"
+            "- UAV/UGV 不同图形显示\n"
+            "- 平台编号显示/隐藏\n"
+            "- 跟随选中目标\n"
+            "- 跟随时禁用手动拖拽\n"
             "- 鼠标点击选中高亮\n"
-            "- 右侧显示平台坐标、速度、时间戳\n"
-            "- 假数据定时刷新\n"
-            "- 历史轨迹显示与清除\n"
+            "- 轨迹显示与清除\n"
+            "- 坐标、速度、时间戳显示\n"
             "- 底部状态栏显示当前选中平台信息",
         )
