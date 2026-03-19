@@ -146,6 +146,24 @@ class MainWindow(QMainWindow):
         self.remove_timeout_spin.valueChanged.connect(self.on_remove_timeout_changed)
         threshold_layout.addRow("下线移除阈值:", self.remove_timeout_spin)
 
+        sim_group = QGroupBox("链路仿真")
+        sim_layout = QFormLayout(sim_group)
+
+        self.packet_loss_checkbox = QCheckBox("启用掉帧仿真")
+        self.packet_loss_checkbox.setChecked(False)
+        self.packet_loss_checkbox.toggled.connect(self.on_packet_loss_toggled)
+        sim_layout.addRow(self.packet_loss_checkbox)
+
+        self.packet_loss_rate_spin = QDoubleSpinBox()
+        self.packet_loss_rate_spin.setDecimals(0)
+        self.packet_loss_rate_spin.setRange(0.0, 95.0)
+        self.packet_loss_rate_spin.setSingleStep(5.0)
+        self.packet_loss_rate_spin.setSuffix(" %")
+        self.packet_loss_rate_spin.setValue(30.0)
+        self.packet_loss_rate_spin.setEnabled(False)
+        self.packet_loss_rate_spin.valueChanged.connect(self.on_packet_loss_rate_changed)
+        sim_layout.addRow("丢包率:", self.packet_loss_rate_spin)
+
         help_group = QGroupBox("操作提示")
         help_layout = QVBoxLayout(help_group)
         help_layout.addWidget(QLabel("1. 鼠标左键点击平台可选中"))
@@ -160,6 +178,7 @@ class MainWindow(QMainWindow):
         help_layout.addWidget(QLabel("10. 暂停后可单步刷新一帧"))
         help_layout.addWidget(QLabel("11. 支持0.5x/1.0x/2.0x回放倍速"))
         help_layout.addWidget(QLabel("12. 支持全局视图/定位选中/复位视图"))
+        help_layout.addWidget(QLabel("13. 支持链路掉帧仿真（用于告警联调）"))
 
         button_group = QGroupBox("控制")
         button_layout = QVBoxLayout(button_group)
@@ -205,6 +224,7 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(list_group)
         right_layout.addWidget(display_group)
         right_layout.addWidget(threshold_group)
+        right_layout.addWidget(sim_group)
         right_layout.addWidget(help_group)
         right_layout.addWidget(button_group)
         right_layout.addStretch()
@@ -298,6 +318,22 @@ class MainWindow(QMainWindow):
 
     def on_remove_timeout_changed(self, value: float) -> None:
         self.map_view.set_remove_timeout(value)
+
+    def on_packet_loss_toggled(self, enabled: bool) -> None:
+        self.data_generator.set_packet_loss_enabled(enabled)
+        self.packet_loss_rate_spin.setEnabled(enabled)
+        self.data_generator.set_packet_loss_rate(self.packet_loss_rate_spin.value() / 100.0)
+        if enabled:
+            self.status_bar.showMessage(
+                f"已启用掉帧仿真 | 丢包率: {self.packet_loss_rate_spin.value():.0f}%"
+            )
+        else:
+            self.status_bar.showMessage("已关闭掉帧仿真")
+
+    def on_packet_loss_rate_changed(self, value: float) -> None:
+        self.data_generator.set_packet_loss_rate(value / 100.0)
+        if self.packet_loss_checkbox.isChecked():
+            self.status_bar.showMessage(f"已调整掉帧仿真丢包率: {value:.0f}%")
 
     def on_playback_speed_changed(self, index: int) -> None:
         speed = self.playback_speed_combo.itemData(index)
@@ -437,7 +473,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "关于",
-            "205_nav_ui 原型（第十三步）\n\n"
+            "205_nav_ui 原型（第十四步）\n\n"
             "当前功能：\n"
             "- UAV/UGV 不同图形显示\n"
             "- 平台列表联动选中与定位\n"
@@ -447,6 +483,7 @@ class MainWindow(QMainWindow):
             "- 暂停后支持单步刷新一帧\n"
             "- 支持0.5x/1.0x/2.0x回放倍速\n"
             "- 支持全局视图/定位选中/复位视图\n"
+            "- 支持链路掉帧仿真（告警联调）\n"
             "- 平台编号显示/隐藏\n"
             "- 跟随选中目标\n"
             "- 跟随时禁用手动拖拽\n"

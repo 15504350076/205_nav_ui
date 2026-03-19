@@ -1,4 +1,5 @@
 import math
+import random
 from typing import List
 
 
@@ -8,6 +9,9 @@ class FakeDataGenerator:
     def __init__(self) -> None:
         self.t = 0.0
         self.dt = 0.08
+        self.packet_loss_enabled = False
+        self.packet_loss_rate = 0.0
+        self.rng = random.Random(205)
         self.platforms = [
             {"id": "UAV1", "type": "UAV", "x": -180.0, "y": -80.0, "z": 30.0},
             {"id": "UAV2", "type": "UAV", "x": 120.0, "y": -120.0, "z": 35.0},
@@ -15,6 +19,12 @@ class FakeDataGenerator:
             {"id": "UGV2", "type": "UGV", "x": 160.0, "y": 100.0, "z": 0.0},
             {"id": "UGV3", "type": "UGV", "x": 20.0, "y": 40.0, "z": 0.0},
         ]
+
+    def set_packet_loss_enabled(self, enabled: bool) -> None:
+        self.packet_loss_enabled = enabled
+
+    def set_packet_loss_rate(self, rate: float) -> None:
+        self.packet_loss_rate = max(0.0, min(0.95, rate))
 
     def get_initial_data(self) -> List[dict]:
         initial = []
@@ -77,4 +87,14 @@ class FakeDataGenerator:
                 }
             )
 
-        return updated
+        if not self.packet_loss_enabled or self.packet_loss_rate <= 0.0:
+            return updated
+
+        transmitted = [
+            frame for frame in updated if self.rng.random() >= self.packet_loss_rate
+        ]
+
+        # Keep at least one platform each frame so the map timestamp keeps advancing.
+        if not transmitted and updated:
+            transmitted.append(updated[self.rng.randrange(len(updated))])
+        return transmitted
