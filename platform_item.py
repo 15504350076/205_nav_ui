@@ -11,6 +11,10 @@ def _fill_color(platform_type: str) -> QColor:
     return QColor(255, 170, 60)
 
 
+def _stale_fill_color() -> QColor:
+    return QColor(120, 120, 120)
+
+
 def _outline_pen(selected: bool) -> QPen:
     if selected:
         return QPen(QColor(255, 255, 0), 2.5)
@@ -40,6 +44,7 @@ class PlatformItem(QGraphicsEllipseItem):
         self.z_val = z
         self.on_selected = on_selected
         self.is_selected_flag = False
+        self.is_stale_flag = False
 
         self.setFlag(QGraphicsEllipseItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
@@ -59,7 +64,8 @@ class PlatformItem(QGraphicsEllipseItem):
         self.setPos(self.x_val, self.y_val)
 
     def _update_style(self) -> None:
-        self.setBrush(QBrush(_fill_color(self.platform_type)))
+        fill_color = _stale_fill_color() if self.is_stale_flag else _fill_color(self.platform_type)
+        self.setBrush(QBrush(fill_color))
         self.setPen(_outline_pen(self.is_selected_flag))
 
     def set_selected(self, selected: bool) -> None:
@@ -69,6 +75,10 @@ class PlatformItem(QGraphicsEllipseItem):
 
     def set_label_visible(self, visible: bool) -> None:
         self.label_item.setVisible(visible)
+
+    def set_stale(self, stale: bool) -> None:
+        self.is_stale_flag = stale
+        self._update_style()
 
     def update_state(self, x: float, y: float, z: float) -> None:
         self.x_val = x
@@ -117,6 +127,7 @@ class UGVPlatformItem(QGraphicsRectItem):
         self.z_val = z
         self.on_selected = on_selected
         self.is_selected_flag = False
+        self.is_stale_flag = False
 
         self.setFlag(QGraphicsRectItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
@@ -136,7 +147,8 @@ class UGVPlatformItem(QGraphicsRectItem):
         self.setPos(self.x_val, self.y_val)
 
     def _update_style(self) -> None:
-        self.setBrush(QBrush(_fill_color(self.platform_type)))
+        fill_color = _stale_fill_color() if self.is_stale_flag else _fill_color(self.platform_type)
+        self.setBrush(QBrush(fill_color))
         self.setPen(_outline_pen(self.is_selected_flag))
 
     def set_selected(self, selected: bool) -> None:
@@ -146,6 +158,10 @@ class UGVPlatformItem(QGraphicsRectItem):
 
     def set_label_visible(self, visible: bool) -> None:
         self.label_item.setVisible(visible)
+
+    def set_stale(self, stale: bool) -> None:
+        self.is_stale_flag = stale
+        self._update_style()
 
     def update_state(self, x: float, y: float, z: float) -> None:
         self.x_val = x

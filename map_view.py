@@ -25,11 +25,14 @@ class MapView(QGraphicsView):
         self.latest_platform_info: dict[str, dict] = {}
         self.track_items: dict[str, QGraphicsPathItem] = {}
         self.track_history: dict[str, list[QPointF]] = {}
+        self.last_update_timestamp: dict[str, float] = {}
+        self.stale_platform_ids: set[str] = set()
         self.selected_platform_id: str | None = None
         self.show_tracks = True
         self.show_labels = True
         self.follow_selected = False
         self.lock_pan_when_follow = True
+        self.stale_timeout_sec = 0.6
         self.max_track_points = 120
 
         self.scene = QGraphicsScene(self)
@@ -110,6 +113,7 @@ class MapView(QGraphicsView):
 
         self.platform_items[platform_info["id"]] = item
         self.latest_platform_info[platform_info["id"]] = platform_info.copy()
+        self.last_update_timestamp[platform_info["id"]] = float(platform_info.get("timestamp", 0.0))
         self.scene.addItem(item)
 
         track_item = QGraphicsPathItem()
@@ -137,6 +141,7 @@ class MapView(QGraphicsView):
         )
 
         self.latest_platform_info[platform_id] = platform_info.copy()
+        self.last_update_timestamp[platform_id] = float(platform_info.get("timestamp", 0.0))
         self._update_track(platform_id, platform_info["x"], platform_info["y"])
 
     def _update_track(self, platform_id: str, x: float, y: float) -> None:
@@ -164,6 +169,7 @@ class MapView(QGraphicsView):
     def update_platforms(self, platform_list: list[dict]) -> None:
         for platform_info in platform_list:
             self.update_platform(platform_info)
+        self._refresh_stale_flags(platform_list)
         if self.follow_selected:
             self._center_on_selected()
 
@@ -219,6 +225,15 @@ class MapView(QGraphicsView):
         self.lock_pan_when_follow = lock
         self._update_drag_mode()
 
+    def set_stale_timeout(self, timeout_sec: float) -> None:
+        self.stale_timeout_sec = max(0.0, timeout_sec)
+
+    def is_platform_stale(self, platform_id: str) -> bool:
+        return platform_id in self.stale_platform_ids
+
+    def get_stale_platform_ids(self) -> set[str]:
+        return set(self.stale_platform_ids)
+
     def clear_tracks(self) -> None:
         for platform_id in self.track_history:
             current_item = self.platform_items[platform_id]
@@ -257,3 +272,20 @@ class MapView(QGraphicsView):
             self.setDragMode(QGraphicsView.DragMode.NoDrag)
             return
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+
+    def _refresh_stale_flags(self, platform_list: list[dict]) -> None:
+        if not self.platform_items:
+            return
+        if platform_list:
+            current_timestamp = max(float(info.get("timestamp", 0.0)) for info in platform_list)
+        else:
+            current_timestamp = max(self.last_update_timestamp.values(), default=0.0)
+
+        stale_ids: set[str] = set()
+        for platform_id, item in self.platform_items.items():
+            last_timestamp = self.last_update_timestamp.get(platform_id, current_timestamp)
+            is_stale = (current_timestamp - last_timestamp) > self.stale_timeout_sec
+            item.set_stale(is_stale)
+            if is_stale:
+                stale_ids.add(platform_id)
+        self.stale_platform_ids = stale_ids

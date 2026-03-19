@@ -1,4 +1,5 @@
 from PySide6.QtCore import QSignalBlocker, QTimer
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -77,8 +78,8 @@ class MainWindow(QMainWindow):
 
         list_group = QGroupBox("平台列表")
         list_layout = QVBoxLayout(list_group)
-        self.platform_table = QTableWidget(0, 4)
-        self.platform_table.setHorizontalHeaderLabels(["ID", "类型", "速度", "时间戳"])
+        self.platform_table = QTableWidget(0, 5)
+        self.platform_table.setHorizontalHeaderLabels(["ID", "类型", "速度", "时间戳", "状态"])
         self.platform_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.platform_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.platform_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -86,8 +87,9 @@ class MainWindow(QMainWindow):
         self.platform_table.verticalHeader().setVisible(False)
         self.platform_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.platform_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self.platform_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.platform_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.platform_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        self.platform_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         self.platform_table.itemSelectionChanged.connect(self.on_table_selection_changed)
         list_layout.addWidget(self.platform_table)
 
@@ -128,6 +130,7 @@ class MainWindow(QMainWindow):
         help_layout.addWidget(QLabel("5. 可开启跟随选中目标"))
         help_layout.addWidget(QLabel("6. 跟随时可禁用手动拖拽"))
         help_layout.addWidget(QLabel("7. 列表点击平台可联动选中与定位"))
+        help_layout.addWidget(QLabel("8. 超时平台会灰显并告警"))
 
         button_group = QGroupBox("控制")
         button_layout = QVBoxLayout(button_group)
@@ -166,6 +169,13 @@ class MainWindow(QMainWindow):
         selected_info = self.map_view.get_selected_platform_info()
         if selected_info is not None:
             self.on_platform_selected(selected_info)
+            return
+
+        stale_count = len(self.map_view.get_stale_platform_ids())
+        if stale_count > 0:
+            self.status_bar.showMessage(f"未选中平台 | 超时平台: {stale_count}")
+        else:
+            self.status_bar.showMessage("未选中平台")
 
     def on_platform_selected(self, platform_info: dict) -> None:
         self.id_label.setText(str(platform_info["id"]))
@@ -176,11 +186,20 @@ class MainWindow(QMainWindow):
         self.speed_label.setText(f'{platform_info.get("speed", 0.0):.2f}')
         self.timestamp_label.setText(f'{platform_info.get("timestamp", 0.0):.2f}')
 
-        self.status_bar.showMessage(
-            f'当前选中: {platform_info["id"]} | '
+        selected_id = str(platform_info["id"])
+        stale_count = len(self.map_view.get_stale_platform_ids())
+        selected_stale = self.map_view.is_platform_stale(selected_id)
+        selected_state_text = "超时" if selected_stale else "正常"
+
+        message = (
+            f'当前选中: {selected_id} | '
             f'类型: {platform_info["type"]} | '
-            f'速度: {platform_info.get("speed", 0.0):.2f}'
+            f'速度: {platform_info.get("speed", 0.0):.2f} | '
+            f'状态: {selected_state_text}'
         )
+        if stale_count > 0:
+            message += f" | 超时平台: {stale_count}"
+        self.status_bar.showMessage(message)
         self.sync_table_selection(platform_info["id"])
 
     def pause_updates(self) -> None:
@@ -212,6 +231,9 @@ class MainWindow(QMainWindow):
 
             self._set_table_text(row, 2, f'{platform_info.get("speed", 0.0):.2f}')
             self._set_table_text(row, 3, f'{platform_info.get("timestamp", 0.0):.2f}')
+            is_stale = self.map_view.is_platform_stale(platform_id)
+            self._set_table_text(row, 4, "超时" if is_stale else "正常")
+            self._set_row_style(row, is_stale)
 
     def _set_table_text(self, row: int, col: int, text: str) -> None:
         item = self.platform_table.item(row, col)
@@ -219,6 +241,16 @@ class MainWindow(QMainWindow):
             item = QTableWidgetItem()
             self.platform_table.setItem(row, col, item)
         item.setText(text)
+
+    def _set_row_style(self, row: int, is_stale: bool) -> None:
+        if is_stale:
+            foreground = QBrush(QColor(255, 120, 120))
+        else:
+            foreground = QBrush(QColor(230, 230, 230))
+        for col in range(self.platform_table.columnCount()):
+            item = self.platform_table.item(row, col)
+            if item is not None:
+                item.setForeground(foreground)
 
     def on_table_selection_changed(self) -> None:
         if self._syncing_table_selection:
@@ -252,10 +284,11 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "关于",
-            "205_nav_ui 原型（第七步）\n\n"
+            "205_nav_ui 原型（第八步）\n\n"
             "当前功能：\n"
             "- UAV/UGV 不同图形显示\n"
             "- 平台列表联动选中与定位\n"
+            "- 数据新鲜度告警（超时灰显）\n"
             "- 平台编号显示/隐藏\n"
             "- 跟随选中目标\n"
             "- 跟随时禁用手动拖拽\n"
