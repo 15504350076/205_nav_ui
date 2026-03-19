@@ -159,6 +159,7 @@ class MainWindow(QMainWindow):
         help_layout.addWidget(QLabel("9. 告警阈值与移除阈值可在线调整"))
         help_layout.addWidget(QLabel("10. 暂停后可单步刷新一帧"))
         help_layout.addWidget(QLabel("11. 支持0.5x/1.0x/2.0x回放倍速"))
+        help_layout.addWidget(QLabel("12. 支持全局视图/定位选中/复位视图"))
 
         button_group = QGroupBox("控制")
         button_layout = QVBoxLayout(button_group)
@@ -171,6 +172,18 @@ class MainWindow(QMainWindow):
         self.playback_speed_combo.currentIndexChanged.connect(self.on_playback_speed_changed)
         button_layout.addWidget(QLabel("回放倍速"))
         button_layout.addWidget(self.playback_speed_combo)
+
+        fit_all_button = QPushButton("全局视图")
+        fit_all_button.clicked.connect(self.on_fit_all_view)
+        button_layout.addWidget(fit_all_button)
+
+        focus_selected_button = QPushButton("定位选中")
+        focus_selected_button.clicked.connect(self.on_focus_selected_view)
+        button_layout.addWidget(focus_selected_button)
+
+        reset_view_button = QPushButton("复位视图")
+        reset_view_button.clicked.connect(self.on_reset_view)
+        button_layout.addWidget(reset_view_button)
 
         pause_button = QPushButton("暂停刷新")
         pause_button.clicked.connect(self.pause_updates)
@@ -202,6 +215,7 @@ class MainWindow(QMainWindow):
         initial_data = self.data_generator.get_initial_data()
         self.map_view.update_platforms(initial_data)
         self.update_platform_table(self.map_view.get_all_platform_infos())
+        self.map_view.fit_all_platforms()
 
     def on_timer_update(self) -> None:
         platform_data = self.data_generator.get_next_frame()
@@ -297,6 +311,22 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage(
                 f"已设置回放倍速: {self.playback_speed:.1f}x（当前为暂停状态）"
             )
+
+    def on_fit_all_view(self) -> None:
+        if self.map_view.fit_all_platforms():
+            self.status_bar.showMessage("已切换到全局视图")
+        else:
+            self.status_bar.showMessage("暂无平台可执行全局视图")
+
+    def on_focus_selected_view(self) -> None:
+        if self.map_view.focus_selected_platform():
+            self.status_bar.showMessage("已定位到当前选中平台")
+        else:
+            self.status_bar.showMessage("未选中平台，无法定位")
+
+    def on_reset_view(self) -> None:
+        self.map_view.reset_view()
+        self.status_bar.showMessage("已复位视图缩放")
 
     def resume_updates(self) -> None:
         self.timer.start(self._current_timer_interval_ms())
@@ -407,7 +437,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "关于",
-            "205_nav_ui 原型（第十二步）\n\n"
+            "205_nav_ui 原型（第十三步）\n\n"
             "当前功能：\n"
             "- UAV/UGV 不同图形显示\n"
             "- 平台列表联动选中与定位\n"
@@ -416,6 +446,7 @@ class MainWindow(QMainWindow):
             "- 超时告警与移除阈值在线可调\n"
             "- 暂停后支持单步刷新一帧\n"
             "- 支持0.5x/1.0x/2.0x回放倍速\n"
+            "- 支持全局视图/定位选中/复位视图\n"
             "- 平台编号显示/隐藏\n"
             "- 跟随选中目标\n"
             "- 跟随时禁用手动拖拽\n"

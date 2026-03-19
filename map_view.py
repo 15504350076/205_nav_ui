@@ -1,6 +1,6 @@
 from typing import Callable
 
-from PySide6.QtCore import Qt, QPointF
+from PySide6.QtCore import Qt, QPointF, QRectF
 from PySide6.QtGui import QPainter, QPen, QColor, QPainterPath, QBrush
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
@@ -198,6 +198,34 @@ class MapView(QGraphicsView):
 
     def center_on_selected(self) -> None:
         self._center_on_selected()
+
+    def focus_selected_platform(self) -> bool:
+        if self.selected_platform_id is None:
+            return False
+        item = self.platform_items.get(self.selected_platform_id)
+        if item is None:
+            return False
+        self.centerOn(item)
+        return True
+
+    def fit_all_platforms(self, padding: float = 30.0) -> bool:
+        if not self.platform_items:
+            return False
+        bounds: QRectF | None = None
+        for item in self.platform_items.values():
+            item_rect = item.sceneBoundingRect()
+            if bounds is None:
+                bounds = item_rect
+            else:
+                bounds = bounds.united(item_rect)
+        if bounds is None:
+            return False
+        bounds.adjust(-padding, -padding, padding, padding)
+        self.fitInView(bounds, Qt.AspectRatioMode.KeepAspectRatio)
+        return True
+
+    def reset_view(self) -> None:
+        self.resetTransform()
 
     def set_show_tracks(self, show: bool) -> None:
         self.show_tracks = show
