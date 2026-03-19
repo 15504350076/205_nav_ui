@@ -3,6 +3,7 @@ from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
+    QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
     QHeaderView,
@@ -121,6 +122,27 @@ class MainWindow(QMainWindow):
         clear_track_button.clicked.connect(self.map_view.clear_tracks)
         display_layout.addWidget(clear_track_button)
 
+        threshold_group = QGroupBox("阈值配置")
+        threshold_layout = QFormLayout(threshold_group)
+
+        self.stale_timeout_spin = QDoubleSpinBox()
+        self.stale_timeout_spin.setDecimals(1)
+        self.stale_timeout_spin.setRange(0.1, 30.0)
+        self.stale_timeout_spin.setSingleStep(0.1)
+        self.stale_timeout_spin.setSuffix(" s")
+        self.stale_timeout_spin.setValue(self.map_view.stale_timeout_sec)
+        self.stale_timeout_spin.valueChanged.connect(self.on_stale_timeout_changed)
+        threshold_layout.addRow("超时告警阈值:", self.stale_timeout_spin)
+
+        self.remove_timeout_spin = QDoubleSpinBox()
+        self.remove_timeout_spin.setDecimals(1)
+        self.remove_timeout_spin.setRange(self.stale_timeout_spin.value(), 60.0)
+        self.remove_timeout_spin.setSingleStep(0.5)
+        self.remove_timeout_spin.setSuffix(" s")
+        self.remove_timeout_spin.setValue(self.map_view.remove_timeout_sec)
+        self.remove_timeout_spin.valueChanged.connect(self.on_remove_timeout_changed)
+        threshold_layout.addRow("下线移除阈值:", self.remove_timeout_spin)
+
         help_group = QGroupBox("操作提示")
         help_layout = QVBoxLayout(help_group)
         help_layout.addWidget(QLabel("1. 鼠标左键点击平台可选中"))
@@ -131,6 +153,7 @@ class MainWindow(QMainWindow):
         help_layout.addWidget(QLabel("6. 跟随时可禁用手动拖拽"))
         help_layout.addWidget(QLabel("7. 列表点击平台可联动选中与定位"))
         help_layout.addWidget(QLabel("8. 超时平台会灰显并告警"))
+        help_layout.addWidget(QLabel("9. 告警阈值与移除阈值可在线调整"))
 
         button_group = QGroupBox("控制")
         button_layout = QVBoxLayout(button_group)
@@ -150,6 +173,7 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(info_group)
         right_layout.addWidget(list_group)
         right_layout.addWidget(display_group)
+        right_layout.addWidget(threshold_group)
         right_layout.addWidget(help_group)
         right_layout.addWidget(button_group)
         right_layout.addStretch()
@@ -218,6 +242,15 @@ class MainWindow(QMainWindow):
     def on_follow_toggled(self, enabled: bool) -> None:
         self.map_view.set_follow_selected(enabled)
         self.follow_lock_checkbox.setEnabled(enabled)
+
+    def on_stale_timeout_changed(self, value: float) -> None:
+        self.map_view.set_stale_timeout(value)
+        self.remove_timeout_spin.setMinimum(value)
+        if self.remove_timeout_spin.value() < value:
+            self.remove_timeout_spin.setValue(value)
+
+    def on_remove_timeout_changed(self, value: float) -> None:
+        self.map_view.set_remove_timeout(value)
 
     def resume_updates(self) -> None:
         self.timer.start(100)
@@ -324,12 +357,13 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "关于",
-            "205_nav_ui 原型（第九步）\n\n"
+            "205_nav_ui 原型（第十步）\n\n"
             "当前功能：\n"
             "- UAV/UGV 不同图形显示\n"
             "- 平台列表联动选中与定位\n"
             "- 数据新鲜度告警（超时灰显）\n"
             "- 下线平台自动移除（图元/轨迹/列表）\n"
+            "- 超时告警与移除阈值在线可调\n"
             "- 平台编号显示/隐藏\n"
             "- 跟随选中目标\n"
             "- 跟随时禁用手动拖拽\n"
