@@ -3,6 +3,7 @@ from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
+    QComboBox,
     QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
@@ -43,6 +44,8 @@ class MainWindow(QMainWindow):
         self.timestamp_label = QLabel("--")
         self.platform_row_by_id: dict[str, int] = {}
         self._syncing_table_selection = False
+        self.base_timer_interval_ms = 100
+        self.playback_speed = 1.0
 
         self.map_view = MapView(on_platform_selected=self.on_platform_selected)
 
@@ -52,7 +55,7 @@ class MainWindow(QMainWindow):
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.on_timer_update)
-        self.timer.start(100)
+        self.timer.start(self._current_timer_interval_ms())
 
         self._init_ui()
         self._load_initial_data()
@@ -155,9 +158,19 @@ class MainWindow(QMainWindow):
         help_layout.addWidget(QLabel("8. 超时平台会灰显并告警"))
         help_layout.addWidget(QLabel("9. 告警阈值与移除阈值可在线调整"))
         help_layout.addWidget(QLabel("10. 暂停后可单步刷新一帧"))
+        help_layout.addWidget(QLabel("11. 支持0.5x/1.0x/2.0x回放倍速"))
 
         button_group = QGroupBox("控制")
         button_layout = QVBoxLayout(button_group)
+
+        self.playback_speed_combo = QComboBox()
+        self.playback_speed_combo.addItem("0.5x", 0.5)
+        self.playback_speed_combo.addItem("1.0x", 1.0)
+        self.playback_speed_combo.addItem("2.0x", 2.0)
+        self.playback_speed_combo.setCurrentIndex(1)
+        self.playback_speed_combo.currentIndexChanged.connect(self.on_playback_speed_changed)
+        button_layout.addWidget(QLabel("回放倍速"))
+        button_layout.addWidget(self.playback_speed_combo)
 
         pause_button = QPushButton("暂停刷新")
         pause_button.clicked.connect(self.pause_updates)
@@ -272,13 +285,30 @@ class MainWindow(QMainWindow):
     def on_remove_timeout_changed(self, value: float) -> None:
         self.map_view.set_remove_timeout(value)
 
+    def on_playback_speed_changed(self, index: int) -> None:
+        speed = self.playback_speed_combo.itemData(index)
+        if speed is None:
+            return
+        self.playback_speed = float(speed)
+        if self.timer.isActive():
+            self.timer.start(self._current_timer_interval_ms())
+            self.status_bar.showMessage(f"已切换回放倍速: {self.playback_speed:.1f}x")
+        else:
+            self.status_bar.showMessage(
+                f"已设置回放倍速: {self.playback_speed:.1f}x（当前为暂停状态）"
+            )
+
     def resume_updates(self) -> None:
-        self.timer.start(100)
+        self.timer.start(self._current_timer_interval_ms())
         selected_info = self.map_view.get_selected_platform_info()
         if selected_info is not None:
             self.on_platform_selected(selected_info, status_prefix="已恢复自动刷新")
         else:
             self.status_bar.showMessage("未选中平台，已恢复刷新")
+
+    def _current_timer_interval_ms(self) -> int:
+        speed = max(self.playback_speed, 0.1)
+        return max(10, int(self.base_timer_interval_ms / speed))
 
     def update_platform_table(self, platform_list: list[dict]) -> None:
         incoming_ids = {str(platform_info["id"]) for platform_info in platform_list}
@@ -377,7 +407,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "关于",
-            "205_nav_ui 原型（第十一步）\n\n"
+            "205_nav_ui 原型（第十二步）\n\n"
             "当前功能：\n"
             "- UAV/UGV 不同图形显示\n"
             "- 平台列表联动选中与定位\n"
@@ -385,6 +415,7 @@ class MainWindow(QMainWindow):
             "- 下线平台自动移除（图元/轨迹/列表）\n"
             "- 超时告警与移除阈值在线可调\n"
             "- 暂停后支持单步刷新一帧\n"
+            "- 支持0.5x/1.0x/2.0x回放倍速\n"
             "- 平台编号显示/隐藏\n"
             "- 跟随选中目标\n"
             "- 跟随时禁用手动拖拽\n"
