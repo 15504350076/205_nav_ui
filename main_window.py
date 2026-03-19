@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QStatusBar,
     QVBoxLayout,
     QWidget,
 )
@@ -32,8 +33,14 @@ class MainWindow(QMainWindow):
         self.x_label = QLabel("--")
         self.y_label = QLabel("--")
         self.z_label = QLabel("--")
+        self.speed_label = QLabel("--")
+        self.timestamp_label = QLabel("--")
 
         self.map_view = MapView(on_platform_selected=self.on_platform_selected)
+
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+        self.status_bar.showMessage("未选中平台")
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.on_timer_update)
@@ -60,6 +67,8 @@ class MainWindow(QMainWindow):
         form_layout.addRow("X 坐标:", self.x_label)
         form_layout.addRow("Y 坐标:", self.y_label)
         form_layout.addRow("Z 坐标:", self.z_label)
+        form_layout.addRow("速度:", self.speed_label)
+        form_layout.addRow("时间戳:", self.timestamp_label)
 
         display_group = QGroupBox("显示控制")
         display_layout = QVBoxLayout(display_group)
@@ -111,12 +120,9 @@ class MainWindow(QMainWindow):
         platform_data = self.data_generator.get_next_frame()
         self.map_view.update_platforms(platform_data)
 
-        if self.map_view.selected_platform_id is not None:
-            selected_id = self.map_view.selected_platform_id
-            for platform in platform_data:
-                if platform["id"] == selected_id:
-                    self.on_platform_selected(platform)
-                    break
+        selected_info = self.map_view.get_selected_platform_info()
+        if selected_info is not None:
+            self.on_platform_selected(selected_info)
 
     def on_platform_selected(self, platform_info: dict) -> None:
         self.id_label.setText(str(platform_info["id"]))
@@ -124,22 +130,37 @@ class MainWindow(QMainWindow):
         self.x_label.setText(f'{platform_info["x"]:.2f}')
         self.y_label.setText(f'{platform_info["y"]:.2f}')
         self.z_label.setText(f'{platform_info["z"]:.2f}')
+        self.speed_label.setText(f'{platform_info.get("speed", 0.0):.2f}')
+        self.timestamp_label.setText(f'{platform_info.get("timestamp", 0.0):.2f}')
+
+        self.status_bar.showMessage(
+            f'当前选中: {platform_info["id"]} | '
+            f'类型: {platform_info["type"]} | '
+            f'速度: {platform_info.get("speed", 0.0):.2f}'
+        )
 
     def pause_updates(self) -> None:
         self.timer.stop()
+        self.status_bar.showMessage("已暂停刷新")
 
     def resume_updates(self) -> None:
         self.timer.start(100)
+        selected_info = self.map_view.get_selected_platform_info()
+        if selected_info is not None:
+            self.on_platform_selected(selected_info)
+        else:
+            self.status_bar.showMessage("未选中平台，已恢复刷新")
 
     def show_about(self) -> None:
         QMessageBox.information(
             self,
             "关于",
-            "205_nav_ui 原型（第二步）\n\n"
+            "205_nav_ui 原型（第三步）\n\n"
             "当前功能：\n"
             "- 多个平台亮点显示\n"
             "- 鼠标点击选中高亮\n"
-            "- 右侧显示平台坐标\n"
+            "- 右侧显示平台坐标、速度、时间戳\n"
             "- 假数据定时刷新\n"
-            "- 历史轨迹显示与清除",
+            "- 历史轨迹显示与清除\n"
+            "- 底部状态栏显示当前选中平台信息",
         )

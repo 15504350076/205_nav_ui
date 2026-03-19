@@ -15,6 +15,7 @@ class MapView(QGraphicsView):
 
         self.on_platform_selected = on_platform_selected
         self.platform_items: dict[str, PlatformItem] = {}
+        self.latest_platform_info: dict[str, dict] = {}
         self.track_items: dict[str, QGraphicsPathItem] = {}
         self.track_history: dict[str, list[QPointF]] = {}
         self.selected_platform_id: str | None = None
@@ -63,13 +64,14 @@ class MapView(QGraphicsView):
             on_selected=self.select_platform,
         )
         self.platform_items[platform_info["id"]] = item
+        self.latest_platform_info[platform_info["id"]] = platform_info.copy()
         self.scene.addItem(item)
 
         track_item = QGraphicsPathItem()
         track_pen = QPen(item.get_track_color(), 1.8)
         track_item.setPen(track_pen)
-        self.scene.addItem(track_item)
         track_item.setZValue(-1)
+        self.scene.addItem(track_item)
 
         self.track_items[platform_info["id"]] = track_item
         self.track_history[platform_info["id"]] = [
@@ -89,6 +91,7 @@ class MapView(QGraphicsView):
             z=platform_info["z"],
         )
 
+        self.latest_platform_info[platform_id] = platform_info.copy()
         self._update_track(platform_id, platform_info["x"], platform_info["y"])
 
     def _update_track(self, platform_id: str, x: float, y: float) -> None:
@@ -123,7 +126,8 @@ class MapView(QGraphicsView):
         for pid, item in self.platform_items.items():
             item.set_selected(pid == self.selected_platform_id)
 
-        self.on_platform_selected(platform_info)
+        latest_info = self.latest_platform_info.get(platform_info["id"], platform_info)
+        self.on_platform_selected(latest_info)
 
     def set_show_tracks(self, show: bool) -> None:
         self.show_tracks = show
@@ -144,6 +148,11 @@ class MapView(QGraphicsView):
             current_item = self.platform_items[platform_id]
             self.track_history[platform_id] = [QPointF(current_item.x_val, current_item.y_val)]
             self.track_items[platform_id].setPath(QPainterPath())
+
+    def get_selected_platform_info(self) -> dict | None:
+        if self.selected_platform_id is None:
+            return None
+        return self.latest_platform_info.get(self.selected_platform_id)
 
     def wheelEvent(self, event) -> None:
         zoom_factor = 1.15
