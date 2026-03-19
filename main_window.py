@@ -1,14 +1,18 @@
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QSignalBlocker, QTimer
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QFormLayout,
     QGroupBox,
+    QHeaderView,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
     QPushButton,
     QStatusBar,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -35,6 +39,8 @@ class MainWindow(QMainWindow):
         self.z_label = QLabel("--")
         self.speed_label = QLabel("--")
         self.timestamp_label = QLabel("--")
+        self.platform_row_by_id: dict[str, int] = {}
+        self._syncing_table_selection = False
 
         self.map_view = MapView(on_platform_selected=self.on_platform_selected)
 
@@ -68,6 +74,22 @@ class MainWindow(QMainWindow):
         form_layout.addRow("Z 坐标:", self.z_label)
         form_layout.addRow("速度:", self.speed_label)
         form_layout.addRow("时间戳:", self.timestamp_label)
+
+        list_group = QGroupBox("平台列表")
+        list_layout = QVBoxLayout(list_group)
+        self.platform_table = QTableWidget(0, 4)
+        self.platform_table.setHorizontalHeaderLabels(["ID", "类型", "速度", "时间戳"])
+        self.platform_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.platform_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.platform_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.platform_table.setAlternatingRowColors(True)
+        self.platform_table.verticalHeader().setVisible(False)
+        self.platform_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.platform_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.platform_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.platform_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        self.platform_table.itemSelectionChanged.connect(self.on_table_selection_changed)
+        list_layout.addWidget(self.platform_table)
 
         display_group = QGroupBox("显示控制")
         display_layout = QVBoxLayout(display_group)
@@ -105,6 +127,7 @@ class MainWindow(QMainWindow):
         help_layout.addWidget(QLabel("4. 鼠标滚轮可缩放，按 R 复位"))
         help_layout.addWidget(QLabel("5. 可开启跟随选中目标"))
         help_layout.addWidget(QLabel("6. 跟随时可禁用手动拖拽"))
+        help_layout.addWidget(QLabel("7. 列表点击平台可联动选中与定位"))
 
         button_group = QGroupBox("控制")
         button_layout = QVBoxLayout(button_group)
@@ -122,6 +145,7 @@ class MainWindow(QMainWindow):
         button_layout.addWidget(about_button)
 
         right_layout.addWidget(info_group)
+        right_layout.addWidget(list_group)
         right_layout.addWidget(display_group)
         right_layout.addWidget(help_group)
         right_layout.addWidget(button_group)
@@ -132,10 +156,12 @@ class MainWindow(QMainWindow):
     def _load_initial_data(self) -> None:
         initial_data = self.data_generator.get_initial_data()
         self.map_view.update_platforms(initial_data)
+        self.update_platform_table(initial_data)
 
     def on_timer_update(self) -> None:
         platform_data = self.data_generator.get_next_frame()
         self.map_view.update_platforms(platform_data)
+        self.update_platform_table(platform_data)
 
         selected_info = self.map_view.get_selected_platform_info()
         if selected_info is not None:
@@ -155,6 +181,7 @@ class MainWindow(QMainWindow):
             f'类型: {platform_info["type"]} | '
             f'速度: {platform_info.get("speed", 0.0):.2f}'
         )
+        self.sync_table_selection(platform_info["id"])
 
     def pause_updates(self) -> None:
         self.timer.stop()
@@ -172,13 +199,63 @@ class MainWindow(QMainWindow):
         else:
             self.status_bar.showMessage("未选中平台，已恢复刷新")
 
+    def update_platform_table(self, platform_list: list[dict]) -> None:
+        for platform_info in platform_list:
+            platform_id = str(platform_info["id"])
+            row = self.platform_row_by_id.get(platform_id)
+            if row is None:
+                row = self.platform_table.rowCount()
+                self.platform_table.insertRow(row)
+                self.platform_row_by_id[platform_id] = row
+                self._set_table_text(row, 0, platform_id)
+                self._set_table_text(row, 1, str(platform_info.get("type", "--")))
+
+            self._set_table_text(row, 2, f'{platform_info.get("speed", 0.0):.2f}')
+            self._set_table_text(row, 3, f'{platform_info.get("timestamp", 0.0):.2f}')
+
+    def _set_table_text(self, row: int, col: int, text: str) -> None:
+        item = self.platform_table.item(row, col)
+        if item is None:
+            item = QTableWidgetItem()
+            self.platform_table.setItem(row, col, item)
+        item.setText(text)
+
+    def on_table_selection_changed(self) -> None:
+        if self._syncing_table_selection:
+            return
+        selected_rows = self.platform_table.selectionModel().selectedRows()
+        if not selected_rows:
+            return
+
+        row = selected_rows[0].row()
+        id_item = self.platform_table.item(row, 0)
+        if id_item is None:
+            return
+
+        platform_id = id_item.text()
+        if self.map_view.select_platform_by_id(platform_id):
+            self.map_view.center_on_selected()
+
+    def sync_table_selection(self, platform_id: str) -> None:
+        row = self.platform_row_by_id.get(platform_id)
+        if row is None:
+            return
+        self._syncing_table_selection = True
+        blocker = QSignalBlocker(self.platform_table)
+        try:
+            self.platform_table.selectRow(row)
+        finally:
+            del blocker
+            self._syncing_table_selection = False
+
     def show_about(self) -> None:
         QMessageBox.information(
             self,
             "关于",
-            "205_nav_ui 原型（第六步）\n\n"
+            "205_nav_ui 原型（第七步）\n\n"
             "当前功能：\n"
             "- UAV/UGV 不同图形显示\n"
+            "- 平台列表联动选中与定位\n"
             "- 平台编号显示/隐藏\n"
             "- 跟随选中目标\n"
             "- 跟随时禁用手动拖拽\n"

@@ -178,6 +178,18 @@ class MapView(QGraphicsView):
         if self.follow_selected:
             self._center_on_selected()
 
+    def select_platform_by_id(self, platform_id: str) -> bool:
+        if platform_id not in self.platform_items:
+            return False
+        platform_info = self.latest_platform_info.get(platform_id)
+        if platform_info is None:
+            platform_info = self.platform_items[platform_id].get_info()
+        self.select_platform(platform_info)
+        return True
+
+    def center_on_selected(self) -> None:
+        self._center_on_selected()
+
     def set_show_tracks(self, show: bool) -> None:
         self.show_tracks = show
         for platform_id, item in self.track_items.items():
