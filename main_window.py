@@ -154,6 +154,7 @@ class MainWindow(QMainWindow):
         help_layout.addWidget(QLabel("7. 列表点击平台可联动选中与定位"))
         help_layout.addWidget(QLabel("8. 超时平台会灰显并告警"))
         help_layout.addWidget(QLabel("9. 告警阈值与移除阈值可在线调整"))
+        help_layout.addWidget(QLabel("10. 暂停后可单步刷新一帧"))
 
         button_group = QGroupBox("控制")
         button_layout = QVBoxLayout(button_group)
@@ -161,6 +162,10 @@ class MainWindow(QMainWindow):
         pause_button = QPushButton("暂停刷新")
         pause_button.clicked.connect(self.pause_updates)
         button_layout.addWidget(pause_button)
+
+        step_button = QPushButton("单步刷新")
+        step_button.clicked.connect(self.step_once)
+        button_layout.addWidget(step_button)
 
         resume_button = QPushButton("恢复刷新")
         resume_button.clicked.connect(self.resume_updates)
@@ -187,12 +192,15 @@ class MainWindow(QMainWindow):
 
     def on_timer_update(self) -> None:
         platform_data = self.data_generator.get_next_frame()
+        self._apply_frame_update(platform_data)
+
+    def _apply_frame_update(self, platform_data: list[dict], status_prefix: str = "") -> None:
         removed_ids = self.map_view.update_platforms(platform_data)
         self.update_platform_table(self.map_view.get_all_platform_infos())
 
         selected_info = self.map_view.get_selected_platform_info()
         if selected_info is not None:
-            self.on_platform_selected(selected_info)
+            self.on_platform_selected(selected_info, status_prefix=status_prefix)
             return
 
         if removed_ids:
@@ -202,15 +210,18 @@ class MainWindow(QMainWindow):
         stale_count = len(self.map_view.get_stale_platform_ids())
         removed_count = len(removed_ids)
         if stale_count > 0:
-            self.status_bar.showMessage(
+            message = (
                 f"未选中平台 | 超时平台: {stale_count} | 本帧移除: {removed_count}"
             )
         elif removed_count > 0:
-            self.status_bar.showMessage(f"未选中平台 | 本帧移除: {removed_count}")
+            message = f"未选中平台 | 本帧移除: {removed_count}"
         else:
-            self.status_bar.showMessage("未选中平台")
+            message = "未选中平台"
+        if status_prefix:
+            message = f"{status_prefix} | {message}"
+        self.status_bar.showMessage(message)
 
-    def on_platform_selected(self, platform_info: dict) -> None:
+    def on_platform_selected(self, platform_info: dict, status_prefix: str = "") -> None:
         self.id_label.setText(str(platform_info["id"]))
         self.type_label.setText(str(platform_info["type"]))
         self.x_label.setText(f'{platform_info["x"]:.2f}')
@@ -232,12 +243,21 @@ class MainWindow(QMainWindow):
         )
         if stale_count > 0:
             message += f" | 超时平台: {stale_count}"
+        if status_prefix:
+            message = f"{status_prefix} | {message}"
         self.status_bar.showMessage(message)
         self.sync_table_selection(platform_info["id"])
 
     def pause_updates(self) -> None:
         self.timer.stop()
         self.status_bar.showMessage("已暂停刷新")
+
+    def step_once(self) -> None:
+        if self.timer.isActive():
+            self.status_bar.showMessage("当前为自动刷新模式，请先暂停后再单步刷新")
+            return
+        platform_data = self.data_generator.get_next_frame()
+        self._apply_frame_update(platform_data, status_prefix="单步刷新完成")
 
     def on_follow_toggled(self, enabled: bool) -> None:
         self.map_view.set_follow_selected(enabled)
@@ -256,7 +276,7 @@ class MainWindow(QMainWindow):
         self.timer.start(100)
         selected_info = self.map_view.get_selected_platform_info()
         if selected_info is not None:
-            self.on_platform_selected(selected_info)
+            self.on_platform_selected(selected_info, status_prefix="已恢复自动刷新")
         else:
             self.status_bar.showMessage("未选中平台，已恢复刷新")
 
@@ -357,13 +377,14 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "关于",
-            "205_nav_ui 原型（第十步）\n\n"
+            "205_nav_ui 原型（第十一步）\n\n"
             "当前功能：\n"
             "- UAV/UGV 不同图形显示\n"
             "- 平台列表联动选中与定位\n"
             "- 数据新鲜度告警（超时灰显）\n"
             "- 下线平台自动移除（图元/轨迹/列表）\n"
             "- 超时告警与移除阈值在线可调\n"
+            "- 暂停后支持单步刷新一帧\n"
             "- 平台编号显示/隐藏\n"
             "- 跟随选中目标\n"
             "- 跟随时禁用手动拖拽\n"
