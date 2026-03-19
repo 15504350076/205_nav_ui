@@ -33,6 +33,7 @@ class MapView(QGraphicsView):
         self.follow_selected = False
         self.lock_pan_when_follow = True
         self.stale_timeout_sec = 0.6
+        self.remove_timeout_sec = 3.0
         self.max_track_points = 120
 
         self.scene = QGraphicsScene(self)
@@ -166,12 +167,14 @@ class MapView(QGraphicsView):
 
         track_item.setPath(path)
 
-    def update_platforms(self, platform_list: list[dict]) -> None:
+    def update_platforms(self, platform_list: list[dict]) -> list[str]:
         for platform_info in platform_list:
             self.update_platform(platform_info)
         self._refresh_stale_flags(platform_list)
+        removed_ids = self._remove_expired_platforms(platform_list)
         if self.follow_selected:
             self._center_on_selected()
+        return removed_ids
 
     def select_platform(self, platform_info: dict) -> None:
         self.selected_platform_id = platform_info["id"]
@@ -228,11 +231,17 @@ class MapView(QGraphicsView):
     def set_stale_timeout(self, timeout_sec: float) -> None:
         self.stale_timeout_sec = max(0.0, timeout_sec)
 
+    def set_remove_timeout(self, timeout_sec: float) -> None:
+        self.remove_timeout_sec = max(0.0, timeout_sec)
+
     def is_platform_stale(self, platform_id: str) -> bool:
         return platform_id in self.stale_platform_ids
 
     def get_stale_platform_ids(self) -> set[str]:
         return set(self.stale_platform_ids)
+
+    def get_all_platform_infos(self) -> list[dict]:
+        return list(self.latest_platform_info.values())
 
     def clear_tracks(self) -> None:
         for platform_id in self.track_history:
@@ -289,3 +298,37 @@ class MapView(QGraphicsView):
             if is_stale:
                 stale_ids.add(platform_id)
         self.stale_platform_ids = stale_ids
+
+    def _remove_expired_platforms(self, platform_list: list[dict]) -> list[str]:
+        if not self.platform_items:
+            return []
+        if platform_list:
+            current_timestamp = max(float(info.get("timestamp", 0.0)) for info in platform_list)
+        else:
+            current_timestamp = max(self.last_update_timestamp.values(), default=0.0)
+
+        removed_ids: list[str] = []
+        for platform_id in list(self.platform_items.keys()):
+            last_timestamp = self.last_update_timestamp.get(platform_id, current_timestamp)
+            if (current_timestamp - last_timestamp) <= self.remove_timeout_sec:
+                continue
+            self._remove_platform(platform_id)
+            removed_ids.append(platform_id)
+        return removed_ids
+
+    def _remove_platform(self, platform_id: str) -> None:
+        platform_item = self.platform_items.pop(platform_id, None)
+        if platform_item is not None:
+            self.scene.removeItem(platform_item)
+
+        track_item = self.track_items.pop(platform_id, None)
+        if track_item is not None:
+            self.scene.removeItem(track_item)
+
+        self.track_history.pop(platform_id, None)
+        self.latest_platform_info.pop(platform_id, None)
+        self.last_update_timestamp.pop(platform_id, None)
+        self.stale_platform_ids.discard(platform_id)
+
+        if self.selected_platform_id == platform_id:
+            self.selected_platform_id = None

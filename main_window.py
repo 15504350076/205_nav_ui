@@ -159,21 +159,30 @@ class MainWindow(QMainWindow):
     def _load_initial_data(self) -> None:
         initial_data = self.data_generator.get_initial_data()
         self.map_view.update_platforms(initial_data)
-        self.update_platform_table(initial_data)
+        self.update_platform_table(self.map_view.get_all_platform_infos())
 
     def on_timer_update(self) -> None:
         platform_data = self.data_generator.get_next_frame()
-        self.map_view.update_platforms(platform_data)
-        self.update_platform_table(platform_data)
+        removed_ids = self.map_view.update_platforms(platform_data)
+        self.update_platform_table(self.map_view.get_all_platform_infos())
 
         selected_info = self.map_view.get_selected_platform_info()
         if selected_info is not None:
             self.on_platform_selected(selected_info)
             return
 
+        if removed_ids:
+            self.clear_selected_platform_info()
+            self.platform_table.clearSelection()
+
         stale_count = len(self.map_view.get_stale_platform_ids())
+        removed_count = len(removed_ids)
         if stale_count > 0:
-            self.status_bar.showMessage(f"未选中平台 | 超时平台: {stale_count}")
+            self.status_bar.showMessage(
+                f"未选中平台 | 超时平台: {stale_count} | 本帧移除: {removed_count}"
+            )
+        elif removed_count > 0:
+            self.status_bar.showMessage(f"未选中平台 | 本帧移除: {removed_count}")
         else:
             self.status_bar.showMessage("未选中平台")
 
@@ -219,6 +228,21 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("未选中平台，已恢复刷新")
 
     def update_platform_table(self, platform_list: list[dict]) -> None:
+        incoming_ids = {str(platform_info["id"]) for platform_info in platform_list}
+        removed_ids = [pid for pid in self.platform_row_by_id if pid not in incoming_ids]
+        if removed_ids:
+            blocker = QSignalBlocker(self.platform_table)
+            try:
+                rows_to_remove = sorted(
+                    (self.platform_row_by_id[pid] for pid in removed_ids),
+                    reverse=True,
+                )
+                for row in rows_to_remove:
+                    self.platform_table.removeRow(row)
+                self._rebuild_platform_row_mapping()
+            finally:
+                del blocker
+
         for platform_info in platform_list:
             platform_id = str(platform_info["id"])
             row = self.platform_row_by_id.get(platform_id)
@@ -252,6 +276,22 @@ class MainWindow(QMainWindow):
             if item is not None:
                 item.setForeground(foreground)
 
+    def _rebuild_platform_row_mapping(self) -> None:
+        self.platform_row_by_id.clear()
+        for row in range(self.platform_table.rowCount()):
+            id_item = self.platform_table.item(row, 0)
+            if id_item is not None:
+                self.platform_row_by_id[id_item.text()] = row
+
+    def clear_selected_platform_info(self) -> None:
+        self.id_label.setText("--")
+        self.type_label.setText("--")
+        self.x_label.setText("--")
+        self.y_label.setText("--")
+        self.z_label.setText("--")
+        self.speed_label.setText("--")
+        self.timestamp_label.setText("--")
+
     def on_table_selection_changed(self) -> None:
         if self._syncing_table_selection:
             return
@@ -284,11 +324,12 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "关于",
-            "205_nav_ui 原型（第八步）\n\n"
+            "205_nav_ui 原型（第九步）\n\n"
             "当前功能：\n"
             "- UAV/UGV 不同图形显示\n"
             "- 平台列表联动选中与定位\n"
             "- 数据新鲜度告警（超时灰显）\n"
+            "- 下线平台自动移除（图元/轨迹/列表）\n"
             "- 平台编号显示/隐藏\n"
             "- 跟随选中目标\n"
             "- 跟随时禁用手动拖拽\n"
