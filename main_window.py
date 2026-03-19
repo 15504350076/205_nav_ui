@@ -5,6 +5,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
+    QFrame,
     QFormLayout,
     QGroupBox,
     QHeaderView,
@@ -13,6 +14,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QStatusBar,
     QTableWidget,
     QTableWidgetItem,
@@ -67,8 +69,13 @@ class MainWindow(QMainWindow):
         main_layout = QHBoxLayout(central_widget)
         main_layout.addWidget(self.map_view, 4)
 
+        right_scroll = QScrollArea()
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setFrameShape(QFrame.Shape.NoFrame)
+
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
 
         info_group = QGroupBox("平台信息")
         form_layout = QFormLayout(info_group)
@@ -229,7 +236,8 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(button_group)
         right_layout.addStretch()
 
-        main_layout.addWidget(right_panel, 1)
+        right_scroll.setWidget(right_panel)
+        main_layout.addWidget(right_scroll, 1)
 
     def _load_initial_data(self) -> None:
         initial_data = self.data_generator.get_initial_data()
