@@ -130,6 +130,41 @@ class MainWindow(QMainWindow):
 
         list_group = QGroupBox("平台列表")
         list_layout = QVBoxLayout(list_group)
+
+        self.platform_summary_label = QLabel("统计: 可见0/总0 | UAV 0 | UGV 0 | 正常 0 | 超时 0")
+        list_layout.addWidget(self.platform_summary_label)
+
+        platform_filter_row = QHBoxLayout()
+        platform_filter_row.addWidget(QLabel("类型"))
+        self.platform_type_filter_combo = QComboBox()
+        self.platform_type_filter_combo.addItem("全部", "all")
+        self.platform_type_filter_combo.addItem("UAV", "UAV")
+        self.platform_type_filter_combo.addItem("UGV", "UGV")
+        self.platform_type_filter_combo.currentIndexChanged.connect(self.apply_platform_table_filters)
+        platform_filter_row.addWidget(self.platform_type_filter_combo)
+
+        platform_filter_row.addWidget(QLabel("状态"))
+        self.platform_status_filter_combo = QComboBox()
+        self.platform_status_filter_combo.addItem("全部", "all")
+        self.platform_status_filter_combo.addItem("正常", "正常")
+        self.platform_status_filter_combo.addItem("超时", "超时")
+        self.platform_status_filter_combo.currentIndexChanged.connect(self.apply_platform_table_filters)
+        platform_filter_row.addWidget(self.platform_status_filter_combo)
+        list_layout.addLayout(platform_filter_row)
+
+        platform_search_row = QHBoxLayout()
+        platform_search_row.addWidget(QLabel("搜索"))
+        self.platform_keyword_edit = QLineEdit()
+        self.platform_keyword_edit.setPlaceholderText("按ID筛选平台")
+        self.platform_keyword_edit.setClearButtonEnabled(True)
+        self.platform_keyword_edit.textChanged.connect(self.apply_platform_table_filters)
+        platform_search_row.addWidget(self.platform_keyword_edit)
+
+        reset_platform_filter_button = QPushButton("重置筛选")
+        reset_platform_filter_button.clicked.connect(self.on_reset_platform_filters)
+        platform_search_row.addWidget(reset_platform_filter_button)
+        list_layout.addLayout(platform_search_row)
+
         self.platform_table = QTableWidget(0, 5)
         self.platform_table.setHorizontalHeaderLabels(["ID", "类型", "速度", "时间戳", "状态"])
         self.platform_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -269,6 +304,10 @@ class MainWindow(QMainWindow):
         help_layout.addWidget(QLabel("29. 回放支持时间轴拖动定位"))
         help_layout.addWidget(QLabel("30. 告警中心支持级别/状态/关键字筛选"))
         help_layout.addWidget(QLabel("31. 告警列表支持CSV导出"))
+        help_layout.addWidget(QLabel("32. 告警中心支持来源分组统计与统计导出"))
+        help_layout.addWidget(QLabel("33. 双击告警可快速定位到对应平台"))
+        help_layout.addWidget(QLabel("34. 平台列表支持类型/状态/关键字筛选"))
+        help_layout.addWidget(QLabel("35. 双击告警统计来源可快速筛选告警"))
 
         export_index_group = QGroupBox("导出索引")
         export_index_layout = QVBoxLayout(export_index_group)
@@ -488,6 +527,10 @@ class MainWindow(QMainWindow):
         self.alert_status_filter_combo.addItem("已确认", "已确认")
         self.alert_status_filter_combo.currentIndexChanged.connect(self.apply_alert_filters)
         alert_filter_row.addWidget(self.alert_status_filter_combo)
+
+        reset_alert_filter_button = QPushButton("重置筛选")
+        reset_alert_filter_button.clicked.connect(self.on_reset_alert_filters)
+        alert_filter_row.addWidget(reset_alert_filter_button)
         alert_layout.addLayout(alert_filter_row)
 
         alert_search_row = QHBoxLayout()
@@ -511,7 +554,26 @@ class MainWindow(QMainWindow):
         self.alert_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.alert_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         self.alert_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.alert_table.cellDoubleClicked.connect(self.on_alert_row_double_clicked)
         alert_layout.addWidget(self.alert_table)
+
+        self.alert_stats_overview_label = QLabel("统计: 可见0条 | 未确认0条")
+        alert_layout.addWidget(self.alert_stats_overview_label)
+
+        self.alert_stats_table = QTableWidget(0, 6)
+        self.alert_stats_table.setHorizontalHeaderLabels(["来源", "总数", "INFO", "WARN", "ERROR", "未确认"])
+        self.alert_stats_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.alert_stats_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.alert_stats_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.alert_stats_table.verticalHeader().setVisible(False)
+        self.alert_stats_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.alert_stats_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.alert_stats_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.alert_stats_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.alert_stats_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.alert_stats_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        self.alert_stats_table.cellDoubleClicked.connect(self.on_alert_stats_row_double_clicked)
+        alert_layout.addWidget(self.alert_stats_table)
 
         alert_button_row = QHBoxLayout()
         ack_alert_button = QPushButton("确认选中")
@@ -529,6 +591,14 @@ class MainWindow(QMainWindow):
         export_alert_button = QPushButton("导出CSV")
         export_alert_button.clicked.connect(self.on_export_alerts_csv)
         alert_button_row.addWidget(export_alert_button)
+
+        export_alert_stats_button = QPushButton("导出统计CSV")
+        export_alert_stats_button.clicked.connect(self.on_export_alert_statistics_csv)
+        alert_button_row.addWidget(export_alert_stats_button)
+
+        refresh_alert_stats_button = QPushButton("刷新统计")
+        refresh_alert_stats_button.clicked.connect(self.update_alert_statistics)
+        alert_button_row.addWidget(refresh_alert_stats_button)
         alert_layout.addLayout(alert_button_row)
 
         self.right_tabs = QTabWidget()
@@ -1153,6 +1223,83 @@ class MainWindow(QMainWindow):
             if keyword and keyword not in source_text.lower() and keyword not in message_text.lower():
                 visible = False
             self.alert_table.setRowHidden(row, not visible)
+        self.update_alert_statistics()
+
+    def on_reset_alert_filters(self) -> None:
+        blockers = (
+            QSignalBlocker(self.alert_level_filter_combo),
+            QSignalBlocker(self.alert_status_filter_combo),
+            QSignalBlocker(self.alert_keyword_edit),
+        )
+        try:
+            self.alert_level_filter_combo.setCurrentIndex(0)
+            self.alert_status_filter_combo.setCurrentIndex(0)
+            self.alert_keyword_edit.clear()
+        finally:
+            for blocker in blockers:
+                del blocker
+        self.apply_alert_filters()
+        self.status_bar.showMessage("告警筛选已重置")
+
+    def _collect_alert_statistics(
+        self,
+        visible_only: bool = True,
+    ) -> tuple[dict[str, int], dict[str, dict[str, int]]]:
+        summary = {
+            "total": 0,
+            "INFO": 0,
+            "WARN": 0,
+            "ERROR": 0,
+            "unacked": 0,
+        }
+        by_source: dict[str, dict[str, int]] = {}
+
+        for row in range(self.alert_table.rowCount()):
+            if visible_only and self.alert_table.isRowHidden(row):
+                continue
+
+            level_text = self.alert_table.item(row, 1).text() if self.alert_table.item(row, 1) else "INFO"
+            source_text = self.alert_table.item(row, 2).text() if self.alert_table.item(row, 2) else "--"
+            status_text = self.alert_table.item(row, 4).text() if self.alert_table.item(row, 4) else "未确认"
+
+            summary["total"] += 1
+            if level_text in ("INFO", "WARN", "ERROR"):
+                summary[level_text] += 1
+            if status_text == "未确认":
+                summary["unacked"] += 1
+
+            source_stats = by_source.setdefault(
+                source_text,
+                {"total": 0, "INFO": 0, "WARN": 0, "ERROR": 0, "unacked": 0},
+            )
+            source_stats["total"] += 1
+            if level_text in ("INFO", "WARN", "ERROR"):
+                source_stats[level_text] += 1
+            if status_text == "未确认":
+                source_stats["unacked"] += 1
+
+        return summary, by_source
+
+    def update_alert_statistics(self) -> None:
+        summary, by_source = self._collect_alert_statistics(visible_only=True)
+        self.alert_stats_overview_label.setText(
+            f'统计: 可见{summary["total"]}条 | 未确认{summary["unacked"]}条 | '
+            f'INFO {summary["INFO"]} / WARN {summary["WARN"]} / ERROR {summary["ERROR"]}'
+        )
+
+        source_rows = sorted(
+            by_source.items(),
+            key=lambda item: (-item[1]["total"], item[0]),
+        )
+        self.alert_stats_table.setRowCount(0)
+        for row, (source, stats) in enumerate(source_rows):
+            self.alert_stats_table.insertRow(row)
+            self.alert_stats_table.setItem(row, 0, QTableWidgetItem(source))
+            self.alert_stats_table.setItem(row, 1, QTableWidgetItem(str(stats["total"])))
+            self.alert_stats_table.setItem(row, 2, QTableWidgetItem(str(stats["INFO"])))
+            self.alert_stats_table.setItem(row, 3, QTableWidgetItem(str(stats["WARN"])))
+            self.alert_stats_table.setItem(row, 4, QTableWidgetItem(str(stats["ERROR"])))
+            self.alert_stats_table.setItem(row, 5, QTableWidgetItem(str(stats["unacked"])))
 
     def on_ack_selected_alerts(self) -> None:
         selected_rows = self.alert_table.selectionModel().selectedRows()
@@ -1178,7 +1325,33 @@ class MainWindow(QMainWindow):
 
     def on_clear_all_alerts(self) -> None:
         self.alert_table.setRowCount(0)
+        self.update_alert_statistics()
         self.status_bar.showMessage("已清空全部告警")
+
+    def on_alert_row_double_clicked(self, row: int, _col: int) -> None:
+        source_item = self.alert_table.item(row, 2)
+        if source_item is None:
+            return
+        source_id = source_item.text().strip()
+        if not source_id:
+            return
+        if self.map_view.select_platform_by_id(source_id):
+            self.platform_manager.set_selected_platform(source_id)
+            self.map_view.center_on_selected()
+            self.right_tabs.setCurrentIndex(0)
+            self.status_bar.showMessage(f"已根据告警定位平台: {source_id}")
+        else:
+            self.status_bar.showMessage(f"未找到告警来源平台: {source_id}")
+
+    def on_alert_stats_row_double_clicked(self, row: int, _col: int) -> None:
+        source_item = self.alert_stats_table.item(row, 0)
+        if source_item is None:
+            return
+        source_id = source_item.text().strip()
+        if not source_id:
+            return
+        self.alert_keyword_edit.setText(source_id)
+        self.status_bar.showMessage(f"已按来源筛选告警: {source_id}")
 
     def on_export_alerts_csv(self) -> None:
         export_dir = Path.cwd() / "exports" / "alerts"
@@ -1211,6 +1384,50 @@ class MainWindow(QMainWindow):
 
         self.refresh_export_index(focus_path=file_path)
         self.status_bar.showMessage(f"已导出告警CSV: {file_path}")
+
+    def on_export_alert_statistics_csv(self) -> None:
+        summary, by_source = self._collect_alert_statistics(visible_only=True)
+        if summary["total"] == 0:
+            self.status_bar.showMessage("当前筛选结果为空，未导出统计CSV")
+            return
+
+        export_dir = Path.cwd() / "exports" / "alerts"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        file_path = export_dir / f"alerts_stats_{timestamp}.csv"
+        try:
+            with file_path.open("w", encoding="utf-8", newline="") as file:
+                writer = csv.writer(file)
+                writer.writerow(["scope", "total", "INFO", "WARN", "ERROR", "unacked"])
+                writer.writerow(
+                    [
+                        "visible",
+                        summary["total"],
+                        summary["INFO"],
+                        summary["WARN"],
+                        summary["ERROR"],
+                        summary["unacked"],
+                    ]
+                )
+                writer.writerow([])
+                writer.writerow(["source", "total", "INFO", "WARN", "ERROR", "unacked"])
+                for source, stats in sorted(by_source.items(), key=lambda item: (-item[1]["total"], item[0])):
+                    writer.writerow(
+                        [
+                            source,
+                            stats["total"],
+                            stats["INFO"],
+                            stats["WARN"],
+                            stats["ERROR"],
+                            stats["unacked"],
+                        ]
+                    )
+        except OSError:
+            self.status_bar.showMessage("告警统计CSV导出失败")
+            return
+
+        self.refresh_export_index(focus_path=file_path)
+        self.status_bar.showMessage(f"已导出告警统计CSV: {file_path}")
 
     def refresh_export_index(
         self,
@@ -1557,6 +1774,73 @@ class MainWindow(QMainWindow):
             self._set_table_text(row, 4, "超时" if is_stale else "正常")
             self._set_row_style(row, is_stale)
 
+        self.apply_platform_table_filters()
+
+    def apply_platform_table_filters(self, _signal_value: object | None = None) -> None:
+        type_filter = self.platform_type_filter_combo.currentData()
+        status_filter = self.platform_status_filter_combo.currentData()
+        keyword = self.platform_keyword_edit.text().strip().lower()
+
+        for row in range(self.platform_table.rowCount()):
+            id_text = self.platform_table.item(row, 0).text() if self.platform_table.item(row, 0) else ""
+            type_text = self.platform_table.item(row, 1).text() if self.platform_table.item(row, 1) else ""
+            status_text = self.platform_table.item(row, 4).text() if self.platform_table.item(row, 4) else ""
+
+            visible = True
+            if type_filter not in (None, "all") and type_text != str(type_filter):
+                visible = False
+            if status_filter not in (None, "all") and status_text != str(status_filter):
+                visible = False
+            if keyword and keyword not in id_text.lower():
+                visible = False
+            self.platform_table.setRowHidden(row, not visible)
+
+        self.update_platform_summary_label()
+
+    def update_platform_summary_label(self) -> None:
+        total = self.platform_table.rowCount()
+        visible_count = 0
+        uav_count = 0
+        ugv_count = 0
+        normal_count = 0
+        stale_count = 0
+
+        for row in range(total):
+            if self.platform_table.isRowHidden(row):
+                continue
+            visible_count += 1
+            type_text = self.platform_table.item(row, 1).text() if self.platform_table.item(row, 1) else ""
+            status_text = self.platform_table.item(row, 4).text() if self.platform_table.item(row, 4) else ""
+            if type_text == "UAV":
+                uav_count += 1
+            elif type_text == "UGV":
+                ugv_count += 1
+            if status_text == "超时":
+                stale_count += 1
+            else:
+                normal_count += 1
+
+        self.platform_summary_label.setText(
+            f"统计: 可见{visible_count}/总{total} | UAV {uav_count} | UGV {ugv_count} | "
+            f"正常 {normal_count} | 超时 {stale_count}"
+        )
+
+    def on_reset_platform_filters(self) -> None:
+        blockers = (
+            QSignalBlocker(self.platform_type_filter_combo),
+            QSignalBlocker(self.platform_status_filter_combo),
+            QSignalBlocker(self.platform_keyword_edit),
+        )
+        try:
+            self.platform_type_filter_combo.setCurrentIndex(0)
+            self.platform_status_filter_combo.setCurrentIndex(0)
+            self.platform_keyword_edit.clear()
+        finally:
+            for blocker in blockers:
+                del blocker
+        self.apply_platform_table_filters()
+        self.status_bar.showMessage("平台列表筛选已重置")
+
     def _set_table_text(self, row: int, col: int, text: str) -> None:
         item = self.platform_table.item(row, col)
         if item is None:
@@ -1626,7 +1910,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "关于",
-            "205_nav_ui 原型（第二十九步）\n\n"
+            "205_nav_ui 原型（第三十一步）\n\n"
             "当前功能：\n"
             "- UAV/UGV 不同图形显示\n"
             "- 平台状态统一dataclass（含在线与真值预留字段）\n"
@@ -1643,6 +1927,11 @@ class MainWindow(QMainWindow):
             "- 告警确认与清理\n"
             "- 告警筛选（级别/状态/关键字）\n"
             "- 告警CSV导出\n"
+            "- 告警来源分组统计与统计CSV导出\n"
+            "- 双击告警可快速定位对应平台\n"
+            "- 双击告警统计来源可快速筛选告警\n"
+            "- 平台列表支持类型/状态/关键字筛选\n"
+            "- 平台列表统计概览（可见/总数/UAV/UGV/正常/超时）\n"
             "- 轨迹时间窗可在线调节\n"
             "- 回放时间轴拖动定位\n"
             "- 平台列表联动选中与定位\n"
