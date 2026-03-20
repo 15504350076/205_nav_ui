@@ -66,6 +66,13 @@ class UiState:
     show_truth_tracks: bool = True
     show_velocity_vectors: bool = False
     track_duration_sec: float = 12.0
+    alert_trigger_enabled: bool = True
+    alert_enable_planar_error: bool = True
+    alert_enable_stale: bool = True
+    alert_enable_recover: bool = True
+    alert_enable_offline: bool = True
+    alert_error_cooldown_sec: float = 1.5
+    alert_error_escalate_count: int = 3
     alert_error_threshold: float = 4.0
     alert_use_type_threshold: bool = False
     alert_error_threshold_uav: float = 4.0
@@ -107,6 +114,34 @@ class UiState:
         )
 
         state.track_duration_sec = _as_float(data.get("track_duration_sec"), state.track_duration_sec)
+        state.alert_trigger_enabled = _as_bool(
+            data.get("alert_trigger_enabled"),
+            state.alert_trigger_enabled,
+        )
+        state.alert_enable_planar_error = _as_bool(
+            data.get("alert_enable_planar_error"),
+            state.alert_enable_planar_error,
+        )
+        state.alert_enable_stale = _as_bool(
+            data.get("alert_enable_stale"),
+            state.alert_enable_stale,
+        )
+        state.alert_enable_recover = _as_bool(
+            data.get("alert_enable_recover"),
+            state.alert_enable_recover,
+        )
+        state.alert_enable_offline = _as_bool(
+            data.get("alert_enable_offline"),
+            state.alert_enable_offline,
+        )
+        state.alert_error_cooldown_sec = _as_float(
+            data.get("alert_error_cooldown_sec"),
+            state.alert_error_cooldown_sec,
+        )
+        state.alert_error_escalate_count = max(
+            1,
+            _as_int(data.get("alert_error_escalate_count"), state.alert_error_escalate_count),
+        )
         state.alert_error_threshold = _as_float(
             data.get("alert_error_threshold"),
             state.alert_error_threshold,
@@ -163,6 +198,13 @@ class UiState:
             "show_truth_tracks": self.show_truth_tracks,
             "show_velocity_vectors": self.show_velocity_vectors,
             "track_duration_sec": self.track_duration_sec,
+            "alert_trigger_enabled": self.alert_trigger_enabled,
+            "alert_enable_planar_error": self.alert_enable_planar_error,
+            "alert_enable_stale": self.alert_enable_stale,
+            "alert_enable_recover": self.alert_enable_recover,
+            "alert_enable_offline": self.alert_enable_offline,
+            "alert_error_cooldown_sec": self.alert_error_cooldown_sec,
+            "alert_error_escalate_count": self.alert_error_escalate_count,
             "alert_error_threshold": self.alert_error_threshold,
             "alert_use_type_threshold": self.alert_use_type_threshold,
             "alert_error_threshold_uav": self.alert_error_threshold_uav,

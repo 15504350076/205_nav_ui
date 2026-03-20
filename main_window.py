@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSlider,
+    QSpinBox,
     QSplitter,
     QStatusBar,
     QTabWidget,
@@ -42,7 +43,11 @@ from models import PlatformState
 from platform_manager import PlatformManager
 from alert_rules import (
     AlertThresholdConfig,
+    AlertThresholdConfigFileMeta,
     AlertThresholdPreset,
+    diff_alert_threshold_configs,
+    load_alert_threshold_config_with_meta,
+    save_alert_threshold_config,
     get_default_alert_threshold_presets,
     resolve_error_threshold,
 )
@@ -104,7 +109,9 @@ class MainWindow(QMainWindow):
         self.alert_max_rows = 400
         self.last_stale_platform_ids: set[str] = set()
         self.last_error_alert_timestamp_by_id: dict[str, float] = {}
+        self.error_exceed_count_by_id: dict[str, int] = {}
         self.alert_id_threshold_overrides: dict[str, float] = {}
+        self.last_alert_threshold_import_meta: AlertThresholdConfigFileMeta | None = None
         self.alert_threshold_presets: list[AlertThresholdPreset] = (
             get_default_alert_threshold_presets()
         )
@@ -360,6 +367,16 @@ class MainWindow(QMainWindow):
         help_layout.addWidget(QLabel("39. 告警误差阈值支持按UAV/UGV类型分别配置"))
         help_layout.addWidget(QLabel("40. 告警误差阈值支持按平台ID覆盖"))
         help_layout.addWidget(QLabel("41. 告警阈值支持预设方案一键切换"))
+        help_layout.addWidget(QLabel("42. 告警阈值配置支持JSON导入/导出"))
+        help_layout.addWidget(QLabel("43. 告警阈值生效来源可实时预览"))
+        help_layout.addWidget(QLabel("44. 导出索引支持筛选告警配置JSON"))
+        help_layout.addWidget(QLabel("45. 可查看导入阈值配置的版本与来源信息"))
+        help_layout.addWidget(QLabel("46. 可对比当前配置与参考预设差异"))
+        help_layout.addWidget(QLabel("47. 阈值JSON支持旧格式兼容导入"))
+        help_layout.addWidget(QLabel("48. 支持按规则开关控制告警触发"))
+        help_layout.addWidget(QLabel("49. 误差告警支持间隔与连续次数升级策略"))
+        help_layout.addWidget(QLabel("50. 告警支持一键确认可见未确认与清空可见"))
+        help_layout.addWidget(QLabel("51. 告警记录支持JSON导出"))
 
         export_index_group = QGroupBox("导出索引")
         export_index_layout = QVBoxLayout(export_index_group)
@@ -371,6 +388,8 @@ class MainWindow(QMainWindow):
         self.export_type_filter_combo.addItem("态势截图", "snapshot")
         self.export_type_filter_combo.addItem("误差CSV", "error_csv")
         self.export_type_filter_combo.addItem("误差曲线PNG", "error_plot")
+        self.export_type_filter_combo.addItem("告警配置JSON", "alert_cfg")
+        self.export_type_filter_combo.addItem("告警记录JSON", "alerts_json")
         self.export_type_filter_combo.currentIndexChanged.connect(self.refresh_export_index)
         export_filter_row.addWidget(self.export_type_filter_combo)
 
@@ -552,6 +571,51 @@ class MainWindow(QMainWindow):
 
         alert_group = QGroupBox("告警中心")
         alert_layout = QVBoxLayout(alert_group)
+
+        alert_rule_row_top = QHBoxLayout()
+        self.alert_trigger_enabled_checkbox = QCheckBox("启用告警触发")
+        self.alert_trigger_enabled_checkbox.setChecked(True)
+        self.alert_trigger_enabled_checkbox.toggled.connect(self.on_alert_rule_controls_changed)
+        alert_rule_row_top.addWidget(self.alert_trigger_enabled_checkbox)
+
+        self.alert_enable_planar_error_checkbox = QCheckBox("误差告警")
+        self.alert_enable_planar_error_checkbox.setChecked(True)
+        self.alert_enable_planar_error_checkbox.toggled.connect(self.on_alert_rule_controls_changed)
+        alert_rule_row_top.addWidget(self.alert_enable_planar_error_checkbox)
+
+        self.alert_enable_stale_checkbox = QCheckBox("超时告警")
+        self.alert_enable_stale_checkbox.setChecked(True)
+        self.alert_enable_stale_checkbox.toggled.connect(self.on_alert_rule_controls_changed)
+        alert_rule_row_top.addWidget(self.alert_enable_stale_checkbox)
+
+        self.alert_enable_recover_checkbox = QCheckBox("恢复告警")
+        self.alert_enable_recover_checkbox.setChecked(True)
+        self.alert_enable_recover_checkbox.toggled.connect(self.on_alert_rule_controls_changed)
+        alert_rule_row_top.addWidget(self.alert_enable_recover_checkbox)
+
+        self.alert_enable_offline_checkbox = QCheckBox("下线告警")
+        self.alert_enable_offline_checkbox.setChecked(True)
+        self.alert_enable_offline_checkbox.toggled.connect(self.on_alert_rule_controls_changed)
+        alert_rule_row_top.addWidget(self.alert_enable_offline_checkbox)
+        alert_layout.addLayout(alert_rule_row_top)
+
+        alert_rule_row_bottom = QHBoxLayout()
+        alert_rule_row_bottom.addWidget(QLabel("误差告警间隔(s)"))
+        self.alert_error_cooldown_spin = QDoubleSpinBox()
+        self.alert_error_cooldown_spin.setDecimals(1)
+        self.alert_error_cooldown_spin.setRange(0.0, 30.0)
+        self.alert_error_cooldown_spin.setSingleStep(0.1)
+        self.alert_error_cooldown_spin.setValue(1.5)
+        self.alert_error_cooldown_spin.valueChanged.connect(self.on_alert_rule_controls_changed)
+        alert_rule_row_bottom.addWidget(self.alert_error_cooldown_spin)
+
+        alert_rule_row_bottom.addWidget(QLabel("误差升级阈值(次)"))
+        self.alert_error_escalate_count_spin = QSpinBox()
+        self.alert_error_escalate_count_spin.setRange(1, 20)
+        self.alert_error_escalate_count_spin.setValue(3)
+        self.alert_error_escalate_count_spin.valueChanged.connect(self.on_alert_rule_controls_changed)
+        alert_rule_row_bottom.addWidget(self.alert_error_escalate_count_spin)
+        alert_layout.addLayout(alert_rule_row_bottom)
         alert_threshold_row = QHBoxLayout()
         alert_threshold_row.addWidget(QLabel("统一误差阈值(m)"))
         self.alert_error_threshold_spin = QDoubleSpinBox()
@@ -603,6 +667,18 @@ class MainWindow(QMainWindow):
         apply_alert_preset_button = QPushButton("应用预设")
         apply_alert_preset_button.clicked.connect(self.on_apply_alert_threshold_preset)
         alert_preset_row.addWidget(apply_alert_preset_button)
+
+        export_alert_preset_button = QPushButton("导出JSON")
+        export_alert_preset_button.clicked.connect(self.on_export_alert_threshold_config_json)
+        alert_preset_row.addWidget(export_alert_preset_button)
+
+        import_alert_preset_button = QPushButton("导入JSON")
+        import_alert_preset_button.clicked.connect(self.on_import_alert_threshold_config_json)
+        alert_preset_row.addWidget(import_alert_preset_button)
+
+        reset_balanced_preset_button = QPushButton("恢复均衡预设")
+        reset_balanced_preset_button.clicked.connect(self.on_reset_alert_threshold_to_balanced)
+        alert_preset_row.addWidget(reset_balanced_preset_button)
         alert_layout.addLayout(alert_preset_row)
 
         self.alert_threshold_preset_desc_label = QLabel("")
@@ -671,6 +747,40 @@ class MainWindow(QMainWindow):
         self.clear_alert_id_threshold_button = clear_alert_id_threshold_button
         alert_id_threshold_button_row.addWidget(clear_alert_id_threshold_button)
         alert_layout.addLayout(alert_id_threshold_button_row)
+
+        self.alert_threshold_preview_label = QLabel("生效阈值预览: 0个平台")
+        alert_layout.addWidget(self.alert_threshold_preview_label)
+
+        self.alert_threshold_preview_table = QTableWidget(0, 3)
+        self.alert_threshold_preview_table.setHorizontalHeaderLabels(["平台ID", "生效阈值(m)", "来源"])
+        self.alert_threshold_preview_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.alert_threshold_preview_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.alert_threshold_preview_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.alert_threshold_preview_table.verticalHeader().setVisible(False)
+        self.alert_threshold_preview_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.alert_threshold_preview_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.alert_threshold_preview_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.alert_threshold_preview_table.cellDoubleClicked.connect(
+            self.on_alert_threshold_preview_row_double_clicked
+        )
+        alert_layout.addWidget(self.alert_threshold_preview_table)
+
+        self.alert_threshold_import_meta_label = QLabel("阈值配置文件: 未导入")
+        alert_layout.addWidget(self.alert_threshold_import_meta_label)
+
+        self.alert_threshold_diff_label = QLabel("与参考预设差异: 0项")
+        alert_layout.addWidget(self.alert_threshold_diff_label)
+
+        self.alert_threshold_diff_table = QTableWidget(0, 3)
+        self.alert_threshold_diff_table.setHorizontalHeaderLabels(["字段", "当前值", "参考值"])
+        self.alert_threshold_diff_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.alert_threshold_diff_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.alert_threshold_diff_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.alert_threshold_diff_table.verticalHeader().setVisible(False)
+        self.alert_threshold_diff_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.alert_threshold_diff_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.alert_threshold_diff_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        alert_layout.addWidget(self.alert_threshold_diff_table)
 
         alert_filter_row = QHBoxLayout()
         alert_filter_row.addWidget(QLabel("级别"))
@@ -742,6 +852,10 @@ class MainWindow(QMainWindow):
         ack_alert_button.clicked.connect(self.on_ack_selected_alerts)
         alert_button_row.addWidget(ack_alert_button)
 
+        ack_visible_alert_button = QPushButton("确认可见未确认")
+        ack_visible_alert_button.clicked.connect(self.on_ack_visible_unacked_alerts)
+        alert_button_row.addWidget(ack_visible_alert_button)
+
         clear_acked_button = QPushButton("清空已确认")
         clear_acked_button.clicked.connect(self.on_clear_acknowledged_alerts)
         alert_button_row.addWidget(clear_acked_button)
@@ -750,9 +864,17 @@ class MainWindow(QMainWindow):
         clear_all_alert_button.clicked.connect(self.on_clear_all_alerts)
         alert_button_row.addWidget(clear_all_alert_button)
 
+        clear_visible_alert_button = QPushButton("清空可见")
+        clear_visible_alert_button.clicked.connect(self.on_clear_visible_alerts)
+        alert_button_row.addWidget(clear_visible_alert_button)
+
         export_alert_button = QPushButton("导出CSV")
         export_alert_button.clicked.connect(self.on_export_alerts_csv)
         alert_button_row.addWidget(export_alert_button)
+
+        export_alert_json_button = QPushButton("导出JSON")
+        export_alert_json_button.clicked.connect(self.on_export_alerts_json)
+        alert_button_row.addWidget(export_alert_json_button)
 
         export_alert_stats_button = QPushButton("导出统计CSV")
         export_alert_stats_button.clicked.connect(self.on_export_alert_statistics_csv)
@@ -764,6 +886,10 @@ class MainWindow(QMainWindow):
         alert_layout.addLayout(alert_button_row)
         self.refresh_alert_id_threshold_table()
         self._refresh_alert_threshold_preset_description()
+        self.refresh_alert_threshold_preview_table()
+        self._refresh_alert_threshold_import_meta_label()
+        self.refresh_alert_threshold_diff_table()
+        self.on_alert_rule_controls_changed()
 
         self.right_tabs = QTabWidget()
         self.right_tabs.setDocumentMode(True)
@@ -837,6 +963,7 @@ class MainWindow(QMainWindow):
         self.map_view.set_stale_platforms(stale_ids)
         self.update_platform_table(all_platforms)
         self._raise_runtime_alerts(all_platforms, stale_ids, removed_ids)
+        self.refresh_alert_threshold_preview_table()
         self.map_view.fit_all_platforms()
 
     def on_timer_update(self) -> None:
@@ -856,6 +983,7 @@ class MainWindow(QMainWindow):
         self.map_view.update_platforms(self.platform_manager.get_all_platforms())
         self.map_view.set_stale_platforms(self.platform_manager.get_stale_platform_ids())
         self.update_platform_table(self.platform_manager.get_all_platforms())
+        self.refresh_alert_threshold_preview_table()
 
         selected_info = self.map_view.get_selected_platform_info()
         if selected_info is not None:
@@ -953,6 +1081,7 @@ class MainWindow(QMainWindow):
         self._set_alert_type_threshold_controls_enabled(enabled)
         if self._is_loading_ui_state:
             return
+        self.refresh_alert_threshold_preview_table()
         self._mark_alert_preset_custom()
         if enabled:
             self.status_bar.showMessage("已启用按平台类型误差阈值")
@@ -960,10 +1089,29 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("已切换为统一误差阈值")
         self._save_ui_state()
 
+    def on_alert_rule_controls_changed(self, _value: object | None = None) -> None:
+        planar_enabled = (
+            self.alert_trigger_enabled_checkbox.isChecked()
+            and self.alert_enable_planar_error_checkbox.isChecked()
+        )
+        self.alert_error_cooldown_spin.setEnabled(
+            planar_enabled
+        )
+        self.alert_error_escalate_count_spin.setEnabled(
+            planar_enabled
+        )
+        if not planar_enabled:
+            self.last_error_alert_timestamp_by_id.clear()
+            self.error_exceed_count_by_id.clear()
+        if self._is_loading_ui_state:
+            return
+        self._save_ui_state()
+
     def on_alert_id_threshold_mode_toggled(self, enabled: bool) -> None:
         self._set_alert_id_threshold_controls_enabled(enabled)
         if self._is_loading_ui_state:
             return
+        self.refresh_alert_threshold_preview_table()
         self._mark_alert_preset_custom()
         if enabled:
             self.status_bar.showMessage("已启用按平台ID阈值覆盖")
@@ -986,6 +1134,7 @@ class MainWindow(QMainWindow):
 
     def on_alert_threshold_preset_changed(self, _index: int) -> None:
         self._refresh_alert_threshold_preset_description()
+        self.refresh_alert_threshold_diff_table()
         if self._is_loading_ui_state:
             return
         self._save_ui_state()
@@ -1000,11 +1149,14 @@ class MainWindow(QMainWindow):
                 self.alert_threshold_preset_combo.setCurrentIndex(index)
         finally:
             del blocker
+        self._clear_alert_threshold_import_meta()
         self._refresh_alert_threshold_preset_description()
+        self.refresh_alert_threshold_diff_table()
 
     def on_alert_threshold_value_changed(self, _value: float) -> None:
         if self._is_loading_ui_state:
             return
+        self.refresh_alert_threshold_preview_table()
         self._mark_alert_preset_custom()
         self._save_ui_state()
 
@@ -1052,8 +1204,52 @@ class MainWindow(QMainWindow):
 
         self.alert_id_threshold_overrides = dict(config.id_overrides)
         self.refresh_alert_id_threshold_table()
+        self.refresh_alert_threshold_preview_table()
         self._set_alert_type_threshold_controls_enabled(config.use_type_threshold)
         self._set_alert_id_threshold_controls_enabled(config.use_id_threshold)
+        self.refresh_alert_threshold_diff_table()
+
+    def _clear_alert_threshold_import_meta(self) -> None:
+        self.last_alert_threshold_import_meta = None
+        self._refresh_alert_threshold_import_meta_label()
+
+    def _refresh_alert_threshold_import_meta_label(self) -> None:
+        meta = self.last_alert_threshold_import_meta
+        if meta is None:
+            self.alert_threshold_import_meta_label.setText("阈值配置文件: 未导入")
+            return
+
+        migrated_note = " | 已兼容旧格式" if meta.migrated_from_legacy else ""
+        exported_at = meta.exported_at if meta.exported_at is not None else "--"
+        self.alert_threshold_import_meta_label.setText(
+            f"阈值配置文件: v{meta.schema_version} | 预设:{meta.preset_key} | "
+            f"导出时间:{exported_at}{migrated_note}"
+        )
+
+    def refresh_alert_threshold_diff_table(self) -> None:
+        current_config = self._current_alert_threshold_config()
+        preset_key = str(self.alert_threshold_preset_combo.currentData())
+        preset = self._alert_preset_by_key(preset_key)
+        if preset is None:
+            reference_name = "参考预设"
+            reference_config = AlertThresholdConfig()
+        else:
+            reference_name = preset.label
+            reference_config = preset.config
+
+        diffs = diff_alert_threshold_configs(current_config, reference_config)
+        self.alert_threshold_diff_label.setText(f"与{reference_name}差异: {len(diffs)}项")
+
+        blocker = QSignalBlocker(self.alert_threshold_diff_table)
+        try:
+            self.alert_threshold_diff_table.setRowCount(0)
+            for row, (field_name, current_text, reference_text) in enumerate(diffs):
+                self.alert_threshold_diff_table.insertRow(row)
+                self.alert_threshold_diff_table.setItem(row, 0, QTableWidgetItem(field_name))
+                self.alert_threshold_diff_table.setItem(row, 1, QTableWidgetItem(current_text))
+                self.alert_threshold_diff_table.setItem(row, 2, QTableWidgetItem(reference_text))
+        finally:
+            del blocker
 
     def on_apply_alert_threshold_preset(self) -> None:
         preset_key = str(self.alert_threshold_preset_combo.currentData())
@@ -1064,8 +1260,91 @@ class MainWindow(QMainWindow):
         if preset.key == "custom":
             self.status_bar.showMessage("当前为自定义预设，不覆盖现有配置")
             return
+        self._clear_alert_threshold_import_meta()
         self._apply_alert_threshold_config(preset.config)
         self.status_bar.showMessage(f"已应用阈值预设: {preset.label}")
+        self._save_ui_state()
+
+    def on_export_alert_threshold_config_json(self) -> None:
+        export_dir = Path.cwd() / "exports" / "alerts"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_path = export_dir / f"alert_threshold_config_{timestamp}.json"
+        file_path_raw, _ = QFileDialog.getSaveFileName(
+            self,
+            "导出告警阈值配置",
+            str(default_path),
+            "JSON Files (*.json)",
+        )
+        if not file_path_raw:
+            self.status_bar.showMessage("已取消导出告警阈值配置")
+            return
+        file_path = Path(file_path_raw)
+        config = self._current_alert_threshold_config()
+        if not save_alert_threshold_config(
+            file_path,
+            config,
+            preset_key=str(self.alert_threshold_preset_combo.currentData()),
+        ):
+            self.status_bar.showMessage("导出告警阈值配置失败")
+            return
+        self.refresh_export_index(focus_path=file_path)
+        self.status_bar.showMessage(f"已导出告警阈值配置: {file_path}")
+
+    def on_import_alert_threshold_config_json(self) -> None:
+        default_dir = Path.cwd() / "exports" / "alerts"
+        file_path_raw, _ = QFileDialog.getOpenFileName(
+            self,
+            "导入告警阈值配置",
+            str(default_dir),
+            "JSON Files (*.json)",
+        )
+        if not file_path_raw:
+            self.status_bar.showMessage("已取消导入告警阈值配置")
+            return
+        file_path = Path(file_path_raw)
+        loaded = load_alert_threshold_config_with_meta(file_path)
+        if loaded is None:
+            self.status_bar.showMessage("告警阈值配置文件无效")
+            return
+        config, meta = loaded
+        self._apply_alert_threshold_config(config)
+        self.last_alert_threshold_import_meta = meta
+        self._refresh_alert_threshold_import_meta_label()
+
+        imported_preset_key = meta.preset_key.strip()
+        preset_index = self.alert_threshold_preset_combo.findData(imported_preset_key)
+        if preset_index >= 0:
+            blocker = QSignalBlocker(self.alert_threshold_preset_combo)
+            try:
+                self.alert_threshold_preset_combo.setCurrentIndex(preset_index)
+            finally:
+                del blocker
+            self._refresh_alert_threshold_preset_description()
+            self.refresh_alert_threshold_diff_table()
+        else:
+            self._mark_alert_preset_custom()
+
+        self.status_bar.showMessage(f"已导入告警阈值配置: {file_path}")
+        self._save_ui_state()
+
+    def on_reset_alert_threshold_to_balanced(self) -> None:
+        preset = self._alert_preset_by_key("balanced")
+        if preset is None:
+            self.status_bar.showMessage("均衡预设不存在")
+            return
+        self._clear_alert_threshold_import_meta()
+        blockers = (QSignalBlocker(self.alert_threshold_preset_combo),)
+        try:
+            index = self.alert_threshold_preset_combo.findData("balanced")
+            if index >= 0:
+                self.alert_threshold_preset_combo.setCurrentIndex(index)
+        finally:
+            for blocker in blockers:
+                del blocker
+        self._refresh_alert_threshold_preset_description()
+        self._apply_alert_threshold_config(preset.config)
+        self.status_bar.showMessage("已恢复均衡预设")
         self._save_ui_state()
 
     def _normalize_threshold_platform_id(self, platform_id: str) -> str:
@@ -1089,6 +1368,22 @@ class MainWindow(QMainWindow):
         except ValueError:
             return
 
+    def on_alert_threshold_preview_row_double_clicked(self, row: int, _col: int) -> None:
+        id_item = self.alert_threshold_preview_table.item(row, 0)
+        if id_item is None:
+            return
+        platform_id = id_item.text().strip()
+        if not platform_id:
+            return
+        self.alert_id_threshold_id_edit.setText(platform_id)
+        if self.map_view.select_platform_by_id(platform_id):
+            self.platform_manager.set_selected_platform(platform_id)
+            self.map_view.center_on_selected()
+            self.right_tabs.setCurrentIndex(0)
+            self.status_bar.showMessage(f"已定位并填入阈值平台: {platform_id}")
+            return
+        self.status_bar.showMessage(f"已填入阈值平台ID: {platform_id}")
+
     def on_set_alert_id_threshold(self) -> None:
         platform_id = self._normalize_threshold_platform_id(self.alert_id_threshold_id_edit.text())
         if not platform_id:
@@ -1097,6 +1392,7 @@ class MainWindow(QMainWindow):
         threshold = self.alert_id_threshold_value_spin.value()
         self.alert_id_threshold_overrides[platform_id] = threshold
         self.refresh_alert_id_threshold_table(select_platform_id=platform_id)
+        self.refresh_alert_threshold_preview_table()
         self._mark_alert_preset_custom()
         self.status_bar.showMessage(f"已设置平台阈值: {platform_id} -> {threshold:.1f} m")
         self._save_ui_state()
@@ -1114,6 +1410,7 @@ class MainWindow(QMainWindow):
         if platform_id in self.alert_id_threshold_overrides:
             self.alert_id_threshold_overrides.pop(platform_id, None)
             self.refresh_alert_id_threshold_table()
+            self.refresh_alert_threshold_preview_table()
             self._mark_alert_preset_custom()
             self.status_bar.showMessage(f"已删除平台阈值: {platform_id}")
             self._save_ui_state()
@@ -1121,6 +1418,7 @@ class MainWindow(QMainWindow):
     def on_clear_alert_id_thresholds(self) -> None:
         self.alert_id_threshold_overrides.clear()
         self.refresh_alert_id_threshold_table()
+        self.refresh_alert_threshold_preview_table()
         self._mark_alert_preset_custom()
         self.status_bar.showMessage("已清空全部平台ID阈值")
         self._save_ui_state()
@@ -1141,6 +1439,30 @@ class MainWindow(QMainWindow):
                 self.alert_id_threshold_table.selectRow(focus_row)
         finally:
             del blocker
+
+    def refresh_alert_threshold_preview_table(self) -> None:
+        platform_list = sorted(
+            self.platform_manager.get_all_platforms(),
+            key=lambda item: str(item.id),
+        )
+        self.alert_threshold_preview_label.setText(
+            f"生效阈值预览: {len(platform_list)}个平台"
+        )
+        blocker = QSignalBlocker(self.alert_threshold_preview_table)
+        try:
+            self.alert_threshold_preview_table.setRowCount(0)
+            for row, state in enumerate(platform_list):
+                threshold, scope = self._error_threshold_for_platform(
+                    str(state.id),
+                    str(state.type),
+                )
+                self.alert_threshold_preview_table.insertRow(row)
+                self.alert_threshold_preview_table.setItem(row, 0, QTableWidgetItem(str(state.id)))
+                self.alert_threshold_preview_table.setItem(row, 1, QTableWidgetItem(f"{threshold:.2f}"))
+                self.alert_threshold_preview_table.setItem(row, 2, QTableWidgetItem(scope))
+        finally:
+            del blocker
+        self.refresh_alert_threshold_diff_table()
 
     def _error_threshold_for_platform(self, platform_id: str, platform_type: str) -> tuple[float, str]:
         config = self._current_alert_threshold_config()
@@ -1505,6 +1827,7 @@ class MainWindow(QMainWindow):
         self.map_view.set_stale_platforms(set())
         self.last_stale_platform_ids = set()
         self.last_error_alert_timestamp_by_id.clear()
+        self.error_exceed_count_by_id.clear()
 
     def _raise_runtime_alerts(
         self,
@@ -1512,35 +1835,67 @@ class MainWindow(QMainWindow):
         stale_ids: set[str],
         removed_ids: list[str],
     ) -> None:
+        if not self.alert_trigger_enabled_checkbox.isChecked():
+            self.error_exceed_count_by_id.clear()
+            self.last_stale_platform_ids = set(stale_ids)
+            return
+
         newly_stale = stale_ids - self.last_stale_platform_ids
         recovered = self.last_stale_platform_ids - stale_ids
 
-        for platform_id in sorted(newly_stale):
-            self._append_alert("WARN", platform_id, "平台状态超时")
-        for platform_id in sorted(recovered):
-            self._append_alert("INFO", platform_id, "平台恢复正常")
-        for platform_id in removed_ids:
-            self._append_alert("ERROR", platform_id, "平台超时下线并已移除")
+        if self.alert_enable_stale_checkbox.isChecked():
+            for platform_id in sorted(newly_stale):
+                self._append_alert("WARN", platform_id, "平台状态超时")
 
-        for state in all_platforms:
-            if state.truth_x is None or state.truth_y is None:
-                continue
-            planar_error = math.hypot(state.x - state.truth_x, state.y - state.truth_y)
-            error_threshold, threshold_scope = self._error_threshold_for_platform(
-                state.id,
-                state.type,
-            )
-            if planar_error <= error_threshold:
-                continue
-            last_alert_ts = self.last_error_alert_timestamp_by_id.get(state.id, -1e9)
-            if state.timestamp - last_alert_ts < 1.5:
-                continue
-            self.last_error_alert_timestamp_by_id[state.id] = state.timestamp
-            self._append_alert(
-                "WARN",
-                state.id,
-                f"平面误差超阈值: {planar_error:.2f} m (> {error_threshold:.2f} m, {threshold_scope})",
-            )
+        if self.alert_enable_recover_checkbox.isChecked():
+            for platform_id in sorted(recovered):
+                self._append_alert("INFO", platform_id, "平台恢复正常")
+
+        if self.alert_enable_offline_checkbox.isChecked():
+            for platform_id in removed_ids:
+                self._append_alert("ERROR", platform_id, "平台超时下线并已移除")
+
+        if self.alert_enable_planar_error_checkbox.isChecked():
+            cooldown_sec = self.alert_error_cooldown_spin.value()
+            escalate_count = self.alert_error_escalate_count_spin.value()
+            active_ids = {str(state.id) for state in all_platforms}
+            for platform_id in list(self.error_exceed_count_by_id):
+                if platform_id not in active_ids:
+                    self.error_exceed_count_by_id.pop(platform_id, None)
+
+            for state in all_platforms:
+                if state.truth_x is None or state.truth_y is None:
+                    continue
+
+                planar_error = math.hypot(state.x - state.truth_x, state.y - state.truth_y)
+                error_threshold, threshold_scope = self._error_threshold_for_platform(
+                    state.id,
+                    state.type,
+                )
+                platform_id = str(state.id)
+                if planar_error <= error_threshold:
+                    self.error_exceed_count_by_id[platform_id] = 0
+                    continue
+
+                exceed_count = self.error_exceed_count_by_id.get(platform_id, 0) + 1
+                self.error_exceed_count_by_id[platform_id] = exceed_count
+
+                last_alert_ts = self.last_error_alert_timestamp_by_id.get(platform_id, -1e9)
+                if state.timestamp - last_alert_ts < cooldown_sec:
+                    continue
+
+                self.last_error_alert_timestamp_by_id[platform_id] = state.timestamp
+                level = "ERROR" if exceed_count >= escalate_count else "WARN"
+                self._append_alert(
+                    level,
+                    state.id,
+                    (
+                        f"平面误差超阈值: {planar_error:.2f} m "
+                        f"(> {error_threshold:.2f} m, {threshold_scope}, 连续{exceed_count}次)"
+                    ),
+                )
+        else:
+            self.error_exceed_count_by_id.clear()
 
         self.last_stale_platform_ids = set(stale_ids)
 
@@ -1680,6 +2035,20 @@ class MainWindow(QMainWindow):
         self.apply_alert_filters()
         self.status_bar.showMessage(f"已确认 {len(selected_rows)} 条告警")
 
+    def on_ack_visible_unacked_alerts(self) -> None:
+        ack_count = 0
+        for row in range(self.alert_table.rowCount()):
+            if self.alert_table.isRowHidden(row):
+                continue
+            status_item = self.alert_table.item(row, 4)
+            if status_item is None:
+                continue
+            if status_item.text() == "未确认":
+                status_item.setText("已确认")
+                ack_count += 1
+        self.apply_alert_filters()
+        self.status_bar.showMessage(f"已确认可见未确认告警: {ack_count} 条")
+
     def on_clear_acknowledged_alerts(self) -> None:
         removed = 0
         for row in range(self.alert_table.rowCount() - 1, -1, -1):
@@ -1694,6 +2063,16 @@ class MainWindow(QMainWindow):
         self.alert_table.setRowCount(0)
         self.update_alert_statistics()
         self.status_bar.showMessage("已清空全部告警")
+
+    def on_clear_visible_alerts(self) -> None:
+        removed = 0
+        for row in range(self.alert_table.rowCount() - 1, -1, -1):
+            if self.alert_table.isRowHidden(row):
+                continue
+            self.alert_table.removeRow(row)
+            removed += 1
+        self.apply_alert_filters()
+        self.status_bar.showMessage(f"已清空可见告警: {removed} 条")
 
     def on_alert_row_double_clicked(self, row: int, _col: int) -> None:
         source_item = self.alert_table.item(row, 2)
@@ -1751,6 +2130,42 @@ class MainWindow(QMainWindow):
 
         self.refresh_export_index(focus_path=file_path)
         self.status_bar.showMessage(f"已导出告警CSV: {file_path}")
+
+    def on_export_alerts_json(self) -> None:
+        export_dir = Path.cwd() / "exports" / "alerts"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        file_path = export_dir / f"alerts_{timestamp}.json"
+
+        payload: list[dict[str, str]] = []
+        for row in range(self.alert_table.rowCount()):
+            if self.alert_table.isRowHidden(row):
+                continue
+            payload.append(
+                {
+                    "time": self.alert_table.item(row, 0).text() if self.alert_table.item(row, 0) else "",
+                    "level": self.alert_table.item(row, 1).text() if self.alert_table.item(row, 1) else "",
+                    "source": self.alert_table.item(row, 2).text() if self.alert_table.item(row, 2) else "",
+                    "message": self.alert_table.item(row, 3).text() if self.alert_table.item(row, 3) else "",
+                    "status": self.alert_table.item(row, 4).text() if self.alert_table.item(row, 4) else "",
+                }
+            )
+
+        if not payload:
+            self.status_bar.showMessage("当前筛选结果为空，未导出告警JSON")
+            return
+
+        try:
+            file_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError:
+            self.status_bar.showMessage("告警JSON导出失败")
+            return
+
+        self.refresh_export_index(focus_path=file_path)
+        self.status_bar.showMessage(f"已导出告警JSON: {file_path}")
 
     def on_export_alert_statistics_csv(self) -> None:
         summary, by_source = self._collect_alert_statistics(visible_only=True)
@@ -1913,6 +2328,13 @@ class MainWindow(QMainWindow):
                 QSignalBlocker(self.alert_status_filter_combo),
                 QSignalBlocker(self.alert_keyword_edit),
                 QSignalBlocker(self.alert_threshold_preset_combo),
+                QSignalBlocker(self.alert_trigger_enabled_checkbox),
+                QSignalBlocker(self.alert_enable_planar_error_checkbox),
+                QSignalBlocker(self.alert_enable_stale_checkbox),
+                QSignalBlocker(self.alert_enable_recover_checkbox),
+                QSignalBlocker(self.alert_enable_offline_checkbox),
+                QSignalBlocker(self.alert_error_cooldown_spin),
+                QSignalBlocker(self.alert_error_escalate_count_spin),
             ]
             try:
                 self._set_combo_to_saved_data(
@@ -1947,6 +2369,13 @@ class MainWindow(QMainWindow):
             self.velocity_vector_checkbox.setChecked(state.show_velocity_vectors)
 
             self.track_duration_spin.setValue(state.track_duration_sec)
+            self.alert_trigger_enabled_checkbox.setChecked(state.alert_trigger_enabled)
+            self.alert_enable_planar_error_checkbox.setChecked(state.alert_enable_planar_error)
+            self.alert_enable_stale_checkbox.setChecked(state.alert_enable_stale)
+            self.alert_enable_recover_checkbox.setChecked(state.alert_enable_recover)
+            self.alert_enable_offline_checkbox.setChecked(state.alert_enable_offline)
+            self.alert_error_cooldown_spin.setValue(state.alert_error_cooldown_sec)
+            self.alert_error_escalate_count_spin.setValue(state.alert_error_escalate_count)
             self.alert_error_threshold_spin.setValue(state.alert_error_threshold)
             self.alert_use_type_threshold_checkbox.setChecked(state.alert_use_type_threshold)
             self.alert_error_threshold_uav_spin.setValue(state.alert_error_threshold_uav)
@@ -1958,9 +2387,11 @@ class MainWindow(QMainWindow):
             self.alert_use_id_threshold_checkbox.setChecked(state.alert_use_id_threshold)
             self.alert_id_threshold_overrides = dict(state.alert_id_threshold_overrides)
             self.refresh_alert_id_threshold_table()
+            self.refresh_alert_threshold_preview_table()
             self._refresh_alert_threshold_preset_description()
             self._set_alert_type_threshold_controls_enabled(state.alert_use_type_threshold)
             self._set_alert_id_threshold_controls_enabled(state.alert_use_id_threshold)
+            self.on_alert_rule_controls_changed()
 
             sort_column = state.platform_sort_column
             try:
@@ -1996,6 +2427,13 @@ class MainWindow(QMainWindow):
             show_truth_tracks=self.truth_track_checkbox.isChecked(),
             show_velocity_vectors=self.velocity_vector_checkbox.isChecked(),
             track_duration_sec=self.track_duration_spin.value(),
+            alert_trigger_enabled=self.alert_trigger_enabled_checkbox.isChecked(),
+            alert_enable_planar_error=self.alert_enable_planar_error_checkbox.isChecked(),
+            alert_enable_stale=self.alert_enable_stale_checkbox.isChecked(),
+            alert_enable_recover=self.alert_enable_recover_checkbox.isChecked(),
+            alert_enable_offline=self.alert_enable_offline_checkbox.isChecked(),
+            alert_error_cooldown_sec=self.alert_error_cooldown_spin.value(),
+            alert_error_escalate_count=self.alert_error_escalate_count_spin.value(),
             alert_error_threshold=self.alert_error_threshold_spin.value(),
             alert_use_type_threshold=self.alert_use_type_threshold_checkbox.isChecked(),
             alert_error_threshold_uav=self.alert_error_threshold_uav_spin.value(),
@@ -2044,6 +2482,10 @@ class MainWindow(QMainWindow):
         suffix = path.suffix.lower()
         if file_name.startswith("nav_snapshot_") and suffix == ".png":
             return "snapshot"
+        if file_name.startswith("alert_threshold_config_") and suffix == ".json":
+            return "alert_cfg"
+        if file_name.startswith("alerts_") and suffix == ".json":
+            return "alerts_json"
         if suffix == ".csv":
             return "error_csv"
         if suffix == ".png" and "_planar_error_" in file_name:
@@ -2054,6 +2496,10 @@ class MainWindow(QMainWindow):
         type_key = self._infer_export_type_key(path)
         if type_key == "snapshot":
             return "态势截图"
+        if type_key == "alert_cfg":
+            return "告警配置JSON"
+        if type_key == "alerts_json":
+            return "告警记录JSON"
         if type_key == "error_csv":
             return "误差CSV"
         if type_key == "error_plot":
@@ -2429,7 +2875,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "关于",
-            "205_nav_ui 原型（第三十六步）\n\n"
+            "205_nav_ui 原型（第四十一步）\n\n"
             "当前功能：\n"
             "- UAV/UGV 不同图形显示\n"
             "- 平台状态统一dataclass（含在线与真值预留字段）\n"
@@ -2459,6 +2905,16 @@ class MainWindow(QMainWindow):
             "- 误差告警阈值支持统一/按类型配置\n"
             "- 误差告警阈值支持按平台ID覆盖\n"
             "- 告警阈值预设方案一键切换\n"
+            "- 告警阈值配置支持JSON导入/导出\n"
+            "- 告警阈值JSON支持版本化与旧格式兼容导入\n"
+            "- 告警阈值生效来源实时预览\n"
+            "- 支持从阈值配置文件回显元信息（版本/预设/导出时间）\n"
+            "- 告警阈值支持与参考预设差异对比\n"
+            "- 告警规则支持按项开关与误差告警间隔配置\n"
+            "- 误差告警支持连续超阈升级为ERROR\n"
+            "- 告警支持一键确认可见未确认与清空可见\n"
+            "- 告警记录支持JSON导出\n"
+            "- 导出索引支持筛选告警配置JSON\n"
             "- 回放时间轴拖动定位\n"
             "- 平台列表联动选中与定位\n"
             "- 数据新鲜度告警（超时灰显）\n"
