@@ -4,6 +4,7 @@ from pathlib import Path
 from PySide6.QtCore import QSignalBlocker, QTimer, Qt, QUrl
 from PySide6.QtGui import QBrush, QColor, QDesktopServices
 from PySide6.QtWidgets import (
+    QApplication,
     QAbstractItemView,
     QCheckBox,
     QComboBox,
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -230,6 +232,7 @@ class MainWindow(QMainWindow):
         help_layout.addWidget(QLabel("20. 导出索引支持最近文件查看与一键打开"))
         help_layout.addWidget(QLabel("21. 导出索引支持类型与时间筛选"))
         help_layout.addWidget(QLabel("22. 右侧功能按选项卡分类切换"))
+        help_layout.addWidget(QLabel("23. 导出索引支持关键字搜索与路径复制"))
 
         export_index_group = QGroupBox("导出索引")
         export_index_layout = QVBoxLayout(export_index_group)
@@ -254,6 +257,15 @@ class MainWindow(QMainWindow):
         export_filter_row.addWidget(self.export_time_filter_combo)
         export_index_layout.addLayout(export_filter_row)
 
+        export_search_row = QHBoxLayout()
+        export_search_row.addWidget(QLabel("搜索"))
+        self.export_keyword_edit = QLineEdit()
+        self.export_keyword_edit.setPlaceholderText("按文件名关键字筛选")
+        self.export_keyword_edit.setClearButtonEnabled(True)
+        self.export_keyword_edit.textChanged.connect(self.refresh_export_index)
+        export_search_row.addWidget(self.export_keyword_edit)
+        export_index_layout.addLayout(export_search_row)
+
         self.export_index_table = QTableWidget(0, 3)
         self.export_index_table.setHorizontalHeaderLabels(["文件名", "类型", "时间"])
         self.export_index_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -271,6 +283,10 @@ class MainWindow(QMainWindow):
         open_file_button = QPushButton("打开选中文件")
         open_file_button.clicked.connect(self.on_open_selected_export)
         export_index_button_row.addWidget(open_file_button)
+
+        copy_path_button = QPushButton("复制文件路径")
+        copy_path_button.clicked.connect(self.on_copy_selected_export_path)
+        export_index_button_row.addWidget(copy_path_button)
 
         open_dir_button = QPushButton("打开导出目录")
         open_dir_button.clicked.connect(self.on_open_export_directory)
@@ -626,13 +642,14 @@ class MainWindow(QMainWindow):
 
     def refresh_export_index(
         self,
-        _signal_value: int | None = None,
+        _signal_value: object | None = None,
         focus_path: Path | None = None,
     ) -> None:
         export_root = Path.cwd() / "exports"
         entries: list[tuple[Path, float]] = []
         selected_type = self.export_type_filter_combo.currentData()
         selected_time_window_sec = self.export_time_filter_combo.currentData()
+        keyword = self.export_keyword_edit.text().strip().lower()
         now_ts = datetime.now().timestamp()
 
         if export_root.exists():
@@ -650,6 +667,8 @@ class MainWindow(QMainWindow):
                     continue
                 export_type_key = self._infer_export_type_key(path)
                 if selected_type not in (None, "all") and export_type_key != selected_type:
+                    continue
+                if keyword and keyword not in path.name.lower():
                     continue
                 entries.append((path, mtime))
 
@@ -711,24 +730,29 @@ class MainWindow(QMainWindow):
         self.export_index_table.selectRow(row)
         self.on_open_selected_export()
 
-    def on_open_selected_export(self) -> None:
+    def _get_selected_export_path(self) -> Path | None:
         selected_rows = self.export_index_table.selectionModel().selectedRows()
         if not selected_rows:
             self.status_bar.showMessage("未选中导出文件")
-            return
+            return None
 
         row = selected_rows[0].row()
         name_item = self.export_index_table.item(row, 0)
         if name_item is None:
             self.status_bar.showMessage("导出文件信息无效")
-            return
+            return None
 
         file_path_raw = name_item.data(Qt.ItemDataRole.UserRole)
         if not isinstance(file_path_raw, str):
             self.status_bar.showMessage("导出文件路径无效")
-            return
+            return None
 
-        file_path = Path(file_path_raw)
+        return Path(file_path_raw)
+
+    def on_open_selected_export(self) -> None:
+        file_path = self._get_selected_export_path()
+        if file_path is None:
+            return
         if not file_path.exists():
             self.refresh_export_index()
             self.status_bar.showMessage("文件不存在，已刷新导出索引")
@@ -738,6 +762,13 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage(f"已打开文件: {file_path}")
             return
         self.status_bar.showMessage("打开文件失败")
+
+    def on_copy_selected_export_path(self) -> None:
+        file_path = self._get_selected_export_path()
+        if file_path is None:
+            return
+        QApplication.clipboard().setText(str(file_path))
+        self.status_bar.showMessage(f"已复制路径: {file_path}")
 
     def on_open_export_directory(self) -> None:
         export_dir = Path.cwd() / "exports"
@@ -852,7 +883,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "关于",
-            "205_nav_ui 原型（第二十三步）\n\n"
+            "205_nav_ui 原型（第二十四步）\n\n"
             "当前功能：\n"
             "- UAV/UGV 不同图形显示\n"
             "- 平台状态统一dataclass（含在线与真值预留字段）\n"
@@ -861,7 +892,8 @@ class MainWindow(QMainWindow):
             "- 真值点/真值轨迹显示与误差可视化（当前+RMS）\n"
             "- 选中平台误差曲线面板\n"
             "- 误差CSV与误差曲线PNG导出\n"
-            "- 导出索引面板（最近导出 + 筛选 + 一键打开）\n"
+            "- 导出索引面板（筛选 + 关键字搜索 + 一键打开）\n"
+            "- 一键复制选中导出文件路径\n"
             "- 平台列表联动选中与定位\n"
             "- 数据新鲜度告警（超时灰显）\n"
             "- 下线平台自动移除（图元/轨迹/列表）\n"
