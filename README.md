@@ -102,7 +102,9 @@ PySide6 原型界面，用于无人机（UAV）与无人车（UGV）协同导航
 - `replay_data_source.py`
   - 录制与回放数据源封装（实时源包装、JSONL读写、回放游标控制）
 - `ros_bridge_adapter.py`
-  - ROS2 桥接适配器骨架（当前 mock 壳实现）
+  - ROS2 桥接适配器骨架与 mock 实时适配器
+- `ros_topic_mapping.py`
+  - 约定 ROS topic 到 `PlatformState` 字段映射（pose/truth/health）
 - `alert_event.py`
   - 统一告警事件模型（运行态与历史快照共用）
 - `platform_manager.py`
@@ -187,6 +189,7 @@ python3 -m pytest -q
 - `tests/test_platform_state.py`
 - `tests/test_replay_data_source.py`
 - `tests/test_ros_bridge_adapter.py`
+- `tests/test_ros_topic_mapping.py`
 
 CI（GitHub Actions）：
 

@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
 
 from fake_data import FakeDataGenerator
 from map_view import MapView
-from data_adapter import ReplayDataAdapter
+from data_adapter import DataAdapter, ReplayDataAdapter
 from data_source import PlatformDataSource
 from live_data_source import LiveDataSourceAdapter
 from replay_data_source import ReplayDataSource
@@ -86,15 +86,39 @@ class NumericTableWidgetItem(QTableWidgetItem):
 class MainWindow(QMainWindow):
     """主窗口：中间地图，右侧信息栏。"""
 
-    def __init__(self, data_source: PlatformDataSource | None = None) -> None:
+    def __init__(self, data_source: PlatformDataSource | DataAdapter | None = None) -> None:
         super().__init__()
 
         self.setWindowTitle("205_nav_ui - PySide6 原型")
         self.resize(1200, 700)
 
-        live_source = data_source if data_source is not None else FakeDataGenerator()
-        live_adapter = LiveDataSourceAdapter(live_source)
-        self.data_source: ReplayDataAdapter = ReplayDataSource(live_adapter)
+        if data_source is None:
+            live_source: PlatformDataSource | None = FakeDataGenerator()
+            live_adapter = LiveDataSourceAdapter(live_source)
+            self.data_source: ReplayDataAdapter = ReplayDataSource(live_adapter)
+        elif all(
+            hasattr(data_source, attr)
+            for attr in (
+                "is_recording",
+                "is_replay_mode",
+                "connect",
+                "disconnect",
+                "poll",
+                "next_frame",
+            )
+        ):
+            live_source = None
+            self.data_source = data_source  # type: ignore[assignment]
+        elif all(
+            hasattr(data_source, attr)
+            for attr in ("connect", "disconnect", "poll", "next_frame", "get_status")
+        ):
+            live_source = None
+            self.data_source = ReplayDataSource(data_source)
+        else:
+            live_source = data_source  # type: ignore[assignment]
+            live_adapter = LiveDataSourceAdapter(live_source)
+            self.data_source = ReplayDataSource(live_adapter)
         self.platform_manager = PlatformManager(stale_timeout_sec=0.6, remove_timeout_sec=3.0)
 
         self.id_label = QLabel("--")
@@ -126,7 +150,7 @@ class MainWindow(QMainWindow):
         self._is_loading_ui_state = False
         self._ui_state_ready = False
         self.packet_loss_controls_supported = all(
-            hasattr(live_source, name)
+            live_source is not None and hasattr(live_source, name)
             for name in ("set_packet_loss_enabled", "set_packet_loss_rate")
         )
 

@@ -19,6 +19,8 @@ class PlatformState:
     speed: float = 0.0
     timestamp: float = 0.0
     is_online: bool = True
+    link_state: str | None = None
+    nav_state: str | None = None
     truth_x: float | None = None
     truth_y: float | None = None
     truth_z: float | None = None
@@ -36,6 +38,8 @@ class PlatformState:
             "speed": self.speed,
             "timestamp": self.timestamp,
             "is_online": self.is_online,
+            "link_state": self.link_state,
+            "nav_state": self.nav_state,
             "truth_x": self.truth_x,
             "truth_y": self.truth_y,
             "truth_z": self.truth_z,
@@ -58,6 +62,16 @@ class PlatformState:
                 speed=float(raw_item.get("speed", 0.0)),
                 timestamp=float(raw_item.get("timestamp", 0.0)),
                 is_online=bool(raw_item.get("is_online", True)),
+                link_state=(
+                    str(raw_item.get("link_state"))
+                    if raw_item.get("link_state") is not None
+                    else None
+                ),
+                nav_state=(
+                    str(raw_item.get("nav_state"))
+                    if raw_item.get("nav_state") is not None
+                    else None
+                ),
                 truth_x=(
                     float(raw_item["truth_x"])
                     if raw_item.get("truth_x") is not None
