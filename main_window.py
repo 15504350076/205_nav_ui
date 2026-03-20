@@ -237,6 +237,7 @@ class MainWindow(QMainWindow):
         help_layout.addWidget(QLabel("22. 右侧功能按选项卡分类切换"))
         help_layout.addWidget(QLabel("23. 导出索引支持关键字搜索与路径复制"))
         help_layout.addWidget(QLabel("24. 支持导出文件置顶与排序"))
+        help_layout.addWidget(QLabel("25. 支持多选导出文件批量打开与清理"))
 
         export_index_group = QGroupBox("导出索引")
         export_index_layout = QVBoxLayout(export_index_group)
@@ -282,7 +283,7 @@ class MainWindow(QMainWindow):
         self.export_index_table = QTableWidget(0, 4)
         self.export_index_table.setHorizontalHeaderLabels(["置顶", "文件名", "类型", "时间"])
         self.export_index_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.export_index_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.export_index_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.export_index_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.export_index_table.setAlternatingRowColors(True)
         self.export_index_table.verticalHeader().setVisible(False)
@@ -318,6 +319,20 @@ class MainWindow(QMainWindow):
         refresh_export_index_button.clicked.connect(self.refresh_export_index)
         export_index_button_row.addWidget(refresh_export_index_button)
         export_index_layout.addLayout(export_index_button_row)
+
+        export_batch_button_row = QHBoxLayout()
+        select_all_visible_button = QPushButton("全选可见")
+        select_all_visible_button.clicked.connect(self.on_select_all_visible_exports)
+        export_batch_button_row.addWidget(select_all_visible_button)
+
+        open_batch_button = QPushButton("批量打开")
+        open_batch_button.clicked.connect(self.on_open_selected_exports_batch)
+        export_batch_button_row.addWidget(open_batch_button)
+
+        cleanup_batch_button = QPushButton("批量清理")
+        cleanup_batch_button.clicked.connect(self.on_cleanup_selected_exports)
+        export_batch_button_row.addWidget(cleanup_batch_button)
+        export_index_layout.addLayout(export_batch_button_row)
 
         button_group = QGroupBox("控制")
         button_layout = QVBoxLayout(button_group)
@@ -813,24 +828,31 @@ class MainWindow(QMainWindow):
         self.export_index_table.selectRow(row)
         self.on_open_selected_export()
 
-    def _get_selected_export_path(self) -> Path | None:
+    def _get_selected_export_paths(self, notify_empty: bool = True) -> list[Path]:
         selected_rows = self.export_index_table.selectionModel().selectedRows()
         if not selected_rows:
-            self.status_bar.showMessage("未选中导出文件")
-            return None
+            if notify_empty:
+                self.status_bar.showMessage("未选中导出文件")
+            return []
 
-        row = selected_rows[0].row()
-        name_item = self.export_index_table.item(row, 1)
-        if name_item is None:
+        selected_paths: list[Path] = []
+        for model_index in selected_rows:
+            name_item = self.export_index_table.item(model_index.row(), 1)
+            if name_item is None:
+                continue
+            file_path_raw = name_item.data(Qt.ItemDataRole.UserRole)
+            if not isinstance(file_path_raw, str):
+                continue
+            selected_paths.append(Path(file_path_raw))
+        if not selected_paths and notify_empty:
             self.status_bar.showMessage("导出文件信息无效")
-            return None
+        return selected_paths
 
-        file_path_raw = name_item.data(Qt.ItemDataRole.UserRole)
-        if not isinstance(file_path_raw, str):
-            self.status_bar.showMessage("导出文件路径无效")
+    def _get_selected_export_path(self) -> Path | None:
+        selected_paths = self._get_selected_export_paths()
+        if not selected_paths:
             return None
-
-        return Path(file_path_raw)
+        return selected_paths[0]
 
     def on_open_selected_export(self) -> None:
         file_path = self._get_selected_export_path()
@@ -847,37 +869,114 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("打开文件失败")
 
     def on_copy_selected_export_path(self) -> None:
-        file_path = self._get_selected_export_path()
-        if file_path is None:
+        selected_paths = self._get_selected_export_paths()
+        if not selected_paths:
             return
-        QApplication.clipboard().setText(str(file_path))
-        self.status_bar.showMessage(f"已复制路径: {file_path}")
+        clipboard_text = "\n".join(str(path) for path in selected_paths)
+        QApplication.clipboard().setText(clipboard_text)
+        if len(selected_paths) == 1:
+            self.status_bar.showMessage(f"已复制路径: {selected_paths[0]}")
+        else:
+            self.status_bar.showMessage(f"已复制 {len(selected_paths)} 个文件路径")
 
     def on_pin_selected_export(self) -> None:
-        file_path = self._get_selected_export_path()
-        if file_path is None:
+        selected_paths = self._get_selected_export_paths()
+        if not selected_paths:
             return
-        path_key = str(file_path.resolve())
-        if path_key in self.pinned_export_paths:
-            self.status_bar.showMessage("该文件已置顶")
+        added_count = 0
+        for file_path in selected_paths:
+            path_key = str(file_path.resolve())
+            if path_key in self.pinned_export_paths:
+                continue
+            self.pinned_export_paths.add(path_key)
+            added_count += 1
+        if added_count == 0:
+            self.status_bar.showMessage("所选文件均已置顶")
             return
-        self.pinned_export_paths.add(path_key)
         self._save_pinned_exports()
-        self.refresh_export_index(focus_path=file_path)
-        self.status_bar.showMessage(f"已置顶文件: {file_path.name}")
+        self.refresh_export_index(focus_path=selected_paths[0])
+        self.status_bar.showMessage(f"已置顶 {added_count} 个文件")
 
     def on_unpin_selected_export(self) -> None:
-        file_path = self._get_selected_export_path()
-        if file_path is None:
+        selected_paths = self._get_selected_export_paths()
+        if not selected_paths:
             return
-        path_key = str(file_path.resolve())
-        if path_key not in self.pinned_export_paths:
-            self.status_bar.showMessage("该文件未置顶")
+        removed_count = 0
+        for file_path in selected_paths:
+            path_key = str(file_path.resolve())
+            if path_key not in self.pinned_export_paths:
+                continue
+            self.pinned_export_paths.remove(path_key)
+            removed_count += 1
+        if removed_count == 0:
+            self.status_bar.showMessage("所选文件均未置顶")
             return
-        self.pinned_export_paths.remove(path_key)
         self._save_pinned_exports()
-        self.refresh_export_index(focus_path=file_path)
-        self.status_bar.showMessage(f"已取消置顶: {file_path.name}")
+        self.refresh_export_index(focus_path=selected_paths[0])
+        self.status_bar.showMessage(f"已取消置顶 {removed_count} 个文件")
+
+    def on_select_all_visible_exports(self) -> None:
+        row_count = self.export_index_table.rowCount()
+        if row_count == 0:
+            self.status_bar.showMessage("当前筛选结果为空")
+            return
+        self.export_index_table.selectAll()
+        self.status_bar.showMessage(f"已全选 {row_count} 个可见文件")
+
+    def on_open_selected_exports_batch(self) -> None:
+        selected_paths = self._get_selected_export_paths()
+        if not selected_paths:
+            return
+
+        opened_count = 0
+        missing_count = 0
+        for file_path in selected_paths:
+            if not file_path.exists():
+                missing_count += 1
+                continue
+            if QDesktopServices.openUrl(QUrl.fromLocalFile(str(file_path))):
+                opened_count += 1
+        if opened_count == 0 and missing_count > 0:
+            self.refresh_export_index()
+            self.status_bar.showMessage("所选文件均不存在，已刷新导出索引")
+            return
+        self.status_bar.showMessage(
+            f"批量打开完成 | 成功: {opened_count} | 不存在: {missing_count}"
+        )
+
+    def on_cleanup_selected_exports(self) -> None:
+        selected_paths = self._get_selected_export_paths()
+        if not selected_paths:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "批量清理导出文件",
+            f"确定删除选中的 {len(selected_paths)} 个导出文件吗？\n该操作不可恢复。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            self.status_bar.showMessage("已取消批量清理")
+            return
+
+        deleted_count = 0
+        failed_count = 0
+        for file_path in selected_paths:
+            try:
+                if file_path.exists():
+                    file_path.unlink()
+                    deleted_count += 1
+                else:
+                    failed_count += 1
+            except OSError:
+                failed_count += 1
+            self.pinned_export_paths.discard(str(file_path.resolve()))
+        self._save_pinned_exports()
+        self.refresh_export_index()
+        self.status_bar.showMessage(
+            f"批量清理完成 | 删除: {deleted_count} | 失败/不存在: {failed_count}"
+        )
 
     def on_open_export_directory(self) -> None:
         export_dir = Path.cwd() / "exports"
@@ -992,7 +1091,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "关于",
-            "205_nav_ui 原型（第二十五步）\n\n"
+            "205_nav_ui 原型（第二十六步）\n\n"
             "当前功能：\n"
             "- UAV/UGV 不同图形显示\n"
             "- 平台状态统一dataclass（含在线与真值预留字段）\n"
@@ -1003,6 +1102,7 @@ class MainWindow(QMainWindow):
             "- 误差CSV与误差曲线PNG导出\n"
             "- 导出索引面板（筛选 + 搜索 + 排序 + 置顶）\n"
             "- 一键复制选中导出文件路径\n"
+            "- 多选导出文件批量打开与批量清理\n"
             "- 平台列表联动选中与定位\n"
             "- 数据新鲜度告警（超时灰显）\n"
             "- 下线平台自动移除（图元/轨迹/列表）\n"
