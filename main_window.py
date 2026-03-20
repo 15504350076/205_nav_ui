@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -61,6 +62,7 @@ class MainWindow(QMainWindow):
         self.error_plot_widget = ErrorPlotWidget()
         self.platform_row_by_id: dict[str, int] = {}
         self._syncing_table_selection = False
+        self.pinned_export_paths: set[str] = set()
         self.base_timer_interval_ms = 100
         self.playback_speed = 1.0
         self.packet_loss_controls_supported = all(
@@ -78,6 +80,7 @@ class MainWindow(QMainWindow):
         self.timer.timeout.connect(self.on_timer_update)
         self.timer.start(self._current_timer_interval_ms())
 
+        self._load_pinned_exports()
         self._init_ui()
         self.refresh_export_index()
         self._load_initial_data()
@@ -233,6 +236,7 @@ class MainWindow(QMainWindow):
         help_layout.addWidget(QLabel("21. 导出索引支持类型与时间筛选"))
         help_layout.addWidget(QLabel("22. 右侧功能按选项卡分类切换"))
         help_layout.addWidget(QLabel("23. 导出索引支持关键字搜索与路径复制"))
+        help_layout.addWidget(QLabel("24. 支持导出文件置顶与排序"))
 
         export_index_group = QGroupBox("导出索引")
         export_index_layout = QVBoxLayout(export_index_group)
@@ -255,6 +259,15 @@ class MainWindow(QMainWindow):
         self.export_time_filter_combo.addItem("最近7天", 7 * 24 * 60 * 60)
         self.export_time_filter_combo.currentIndexChanged.connect(self.refresh_export_index)
         export_filter_row.addWidget(self.export_time_filter_combo)
+
+        export_filter_row.addWidget(QLabel("排序"))
+        self.export_sort_combo = QComboBox()
+        self.export_sort_combo.addItem("时间新->旧", "mtime_desc")
+        self.export_sort_combo.addItem("时间旧->新", "mtime_asc")
+        self.export_sort_combo.addItem("名称A->Z", "name_asc")
+        self.export_sort_combo.addItem("名称Z->A", "name_desc")
+        self.export_sort_combo.currentIndexChanged.connect(self.refresh_export_index)
+        export_filter_row.addWidget(self.export_sort_combo)
         export_index_layout.addLayout(export_filter_row)
 
         export_search_row = QHBoxLayout()
@@ -266,16 +279,17 @@ class MainWindow(QMainWindow):
         export_search_row.addWidget(self.export_keyword_edit)
         export_index_layout.addLayout(export_search_row)
 
-        self.export_index_table = QTableWidget(0, 3)
-        self.export_index_table.setHorizontalHeaderLabels(["文件名", "类型", "时间"])
+        self.export_index_table = QTableWidget(0, 4)
+        self.export_index_table.setHorizontalHeaderLabels(["置顶", "文件名", "类型", "时间"])
         self.export_index_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.export_index_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.export_index_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.export_index_table.setAlternatingRowColors(True)
         self.export_index_table.verticalHeader().setVisible(False)
-        self.export_index_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.export_index_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.export_index_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.export_index_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.export_index_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.export_index_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self.export_index_table.cellDoubleClicked.connect(self.on_export_index_double_clicked)
         export_index_layout.addWidget(self.export_index_table)
 
@@ -287,6 +301,14 @@ class MainWindow(QMainWindow):
         copy_path_button = QPushButton("复制文件路径")
         copy_path_button.clicked.connect(self.on_copy_selected_export_path)
         export_index_button_row.addWidget(copy_path_button)
+
+        pin_button = QPushButton("置顶选中文件")
+        pin_button.clicked.connect(self.on_pin_selected_export)
+        export_index_button_row.addWidget(pin_button)
+
+        unpin_button = QPushButton("取消置顶")
+        unpin_button.clicked.connect(self.on_unpin_selected_export)
+        export_index_button_row.addWidget(unpin_button)
 
         open_dir_button = QPushButton("打开导出目录")
         open_dir_button.clicked.connect(self.on_open_export_directory)
@@ -646,15 +668,20 @@ class MainWindow(QMainWindow):
         focus_path: Path | None = None,
     ) -> None:
         export_root = Path.cwd() / "exports"
-        entries: list[tuple[Path, float]] = []
+        entries: list[tuple[Path, float, bool]] = []
         selected_type = self.export_type_filter_combo.currentData()
         selected_time_window_sec = self.export_time_filter_combo.currentData()
+        selected_sort = self.export_sort_combo.currentData()
         keyword = self.export_keyword_edit.text().strip().lower()
         now_ts = datetime.now().timestamp()
+        active_paths: set[str] = set()
 
         if export_root.exists():
+            pinned_store_path = self._pinned_store_path().resolve()
             for path in export_root.rglob("*"):
                 if not path.is_file():
+                    continue
+                if path.resolve() == pinned_store_path:
                     continue
                 try:
                     mtime = path.stat().st_mtime
@@ -670,32 +697,55 @@ class MainWindow(QMainWindow):
                     continue
                 if keyword and keyword not in path.name.lower():
                     continue
-                entries.append((path, mtime))
+                path_key = str(path.resolve())
+                active_paths.add(path_key)
+                entries.append((path, mtime, path_key in self.pinned_export_paths))
 
-        entries.sort(key=lambda item: item[1], reverse=True)
+        # Clean up missing pinned files.
+        if self.pinned_export_paths:
+            valid_pinned = {path for path in self.pinned_export_paths if path in active_paths}
+            if valid_pinned != self.pinned_export_paths:
+                self.pinned_export_paths = valid_pinned
+                self._save_pinned_exports()
+
+        if selected_sort == "mtime_asc":
+            entries.sort(key=lambda item: item[1], reverse=False)
+        elif selected_sort == "name_asc":
+            entries.sort(key=lambda item: item[0].name.lower(), reverse=False)
+        elif selected_sort == "name_desc":
+            entries.sort(key=lambda item: item[0].name.lower(), reverse=True)
+        else:
+            entries.sort(key=lambda item: item[1], reverse=True)
+
+        # Pinned files always stay on top.
+        entries.sort(key=lambda item: 0 if item[2] else 1)
         entries = entries[:80]
 
         focus_row: int | None = None
         blocker = QSignalBlocker(self.export_index_table)
         try:
             self.export_index_table.setRowCount(0)
-            for row, (path, mtime) in enumerate(entries):
+            for row, (path, mtime, pinned) in enumerate(entries):
                 if focus_path is not None and path == focus_path:
                     focus_row = row
                 self.export_index_table.insertRow(row)
 
+                pin_item = QTableWidgetItem("★" if pinned else "")
+                pin_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.export_index_table.setItem(row, 0, pin_item)
+
                 name_item = QTableWidgetItem(path.name)
                 name_item.setData(Qt.ItemDataRole.UserRole, str(path))
                 name_item.setToolTip(str(path))
-                self.export_index_table.setItem(row, 0, name_item)
+                self.export_index_table.setItem(row, 1, name_item)
 
                 type_item = QTableWidgetItem(self._infer_export_type_label(path))
-                self.export_index_table.setItem(row, 1, type_item)
+                self.export_index_table.setItem(row, 2, type_item)
 
                 time_item = QTableWidgetItem(
                     datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
                 )
-                self.export_index_table.setItem(row, 2, time_item)
+                self.export_index_table.setItem(row, 3, time_item)
         finally:
             del blocker
 
@@ -704,6 +754,39 @@ class MainWindow(QMainWindow):
         if focus_row is None:
             focus_row = 0
         self.export_index_table.selectRow(focus_row)
+
+    def _pinned_store_path(self) -> Path:
+        return Path.cwd() / "exports" / ".pinned_exports.json"
+
+    def _load_pinned_exports(self) -> None:
+        store_path = self._pinned_store_path()
+        if not store_path.exists():
+            return
+        try:
+            data = json.loads(store_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        if not isinstance(data, list):
+            return
+        normalized: set[str] = set()
+        for item in data:
+            if not isinstance(item, str):
+                continue
+            normalized.add(str(Path(item).resolve()))
+        self.pinned_export_paths = normalized
+
+    def _save_pinned_exports(self) -> None:
+        store_path = self._pinned_store_path()
+        store_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            serialized = json.dumps(
+                sorted(self.pinned_export_paths),
+                ensure_ascii=False,
+                indent=2,
+            )
+            store_path.write_text(serialized, encoding="utf-8")
+        except OSError:
+            return
 
     def _infer_export_type_key(self, path: Path) -> str:
         file_name = path.name
@@ -737,7 +820,7 @@ class MainWindow(QMainWindow):
             return None
 
         row = selected_rows[0].row()
-        name_item = self.export_index_table.item(row, 0)
+        name_item = self.export_index_table.item(row, 1)
         if name_item is None:
             self.status_bar.showMessage("导出文件信息无效")
             return None
@@ -769,6 +852,32 @@ class MainWindow(QMainWindow):
             return
         QApplication.clipboard().setText(str(file_path))
         self.status_bar.showMessage(f"已复制路径: {file_path}")
+
+    def on_pin_selected_export(self) -> None:
+        file_path = self._get_selected_export_path()
+        if file_path is None:
+            return
+        path_key = str(file_path.resolve())
+        if path_key in self.pinned_export_paths:
+            self.status_bar.showMessage("该文件已置顶")
+            return
+        self.pinned_export_paths.add(path_key)
+        self._save_pinned_exports()
+        self.refresh_export_index(focus_path=file_path)
+        self.status_bar.showMessage(f"已置顶文件: {file_path.name}")
+
+    def on_unpin_selected_export(self) -> None:
+        file_path = self._get_selected_export_path()
+        if file_path is None:
+            return
+        path_key = str(file_path.resolve())
+        if path_key not in self.pinned_export_paths:
+            self.status_bar.showMessage("该文件未置顶")
+            return
+        self.pinned_export_paths.remove(path_key)
+        self._save_pinned_exports()
+        self.refresh_export_index(focus_path=file_path)
+        self.status_bar.showMessage(f"已取消置顶: {file_path.name}")
 
     def on_open_export_directory(self) -> None:
         export_dir = Path.cwd() / "exports"
@@ -883,7 +992,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "关于",
-            "205_nav_ui 原型（第二十四步）\n\n"
+            "205_nav_ui 原型（第二十五步）\n\n"
             "当前功能：\n"
             "- UAV/UGV 不同图形显示\n"
             "- 平台状态统一dataclass（含在线与真值预留字段）\n"
@@ -892,7 +1001,7 @@ class MainWindow(QMainWindow):
             "- 真值点/真值轨迹显示与误差可视化（当前+RMS）\n"
             "- 选中平台误差曲线面板\n"
             "- 误差CSV与误差曲线PNG导出\n"
-            "- 导出索引面板（筛选 + 关键字搜索 + 一键打开）\n"
+            "- 导出索引面板（筛选 + 搜索 + 排序 + 置顶）\n"
             "- 一键复制选中导出文件路径\n"
             "- 平台列表联动选中与定位\n"
             "- 数据新鲜度告警（超时灰显）\n"
