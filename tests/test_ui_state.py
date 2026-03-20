@@ -15,6 +15,8 @@ def test_from_dict_parses_basic_fields() -> None:
         "alert_use_type_threshold": True,
         "alert_error_threshold_uav": 3.5,
         "alert_error_threshold_ugv": 2.0,
+        "alert_use_id_threshold": True,
+        "alert_id_threshold_overrides": {"UAV1": 2.5, "UGV1": 1.8},
     }
 
     state = UiState.from_dict(payload)
@@ -28,6 +30,8 @@ def test_from_dict_parses_basic_fields() -> None:
     assert state.alert_use_type_threshold is True
     assert state.alert_error_threshold_uav == 3.5
     assert state.alert_error_threshold_ugv == 2.0
+    assert state.alert_use_id_threshold is True
+    assert state.alert_id_threshold_overrides == {"UAV1": 2.5, "UGV1": 1.8}
 
 
 def test_from_dict_handles_invalid_values_with_defaults() -> None:
@@ -37,6 +41,7 @@ def test_from_dict_handles_invalid_values_with_defaults() -> None:
         "track_duration_sec": "oops",
         "show_tracks": "false",
         "alert_error_threshold": None,
+        "alert_id_threshold_overrides": {"  ": "nan", 1: 2.0, "UAV1": "3.3", "UAV2": "nan"},
     }
 
     state = UiState.from_dict(payload)
@@ -46,6 +51,7 @@ def test_from_dict_handles_invalid_values_with_defaults() -> None:
     assert state.track_duration_sec == 12.0
     assert state.show_tracks is False
     assert state.alert_error_threshold == 4.0
+    assert state.alert_id_threshold_overrides == {"UAV1": 3.3, "UAV2": 4.0}
 
 
 def test_ui_state_round_trip_file(tmp_path: Path) -> None:
@@ -57,6 +63,8 @@ def test_ui_state_round_trip_file(tmp_path: Path) -> None:
         show_velocity_vectors=True,
         alert_use_type_threshold=True,
         alert_error_threshold_uav=4.2,
+        alert_use_id_threshold=True,
+        alert_id_threshold_overrides={"UAV1": 3.1, "UGV2": 2.4},
     )
 
     assert save_ui_state(path, source)

@@ -98,6 +98,7 @@ class MainWindow(QMainWindow):
         self.alert_max_rows = 400
         self.last_stale_platform_ids: set[str] = set()
         self.last_error_alert_timestamp_by_id: dict[str, float] = {}
+        self.alert_id_threshold_overrides: dict[str, float] = {}
         self.base_timer_interval_ms = 100
         self.playback_speed = 1.0
         self._is_loading_ui_state = False
@@ -348,6 +349,7 @@ class MainWindow(QMainWindow):
         help_layout.addWidget(QLabel("37. 可开启速度矢量显示方向与速度大小"))
         help_layout.addWidget(QLabel("38. 平台筛选条件可在重启后自动恢复"))
         help_layout.addWidget(QLabel("39. 告警误差阈值支持按UAV/UGV类型分别配置"))
+        help_layout.addWidget(QLabel("40. 告警误差阈值支持按平台ID覆盖"))
 
         export_index_group = QGroupBox("导出索引")
         export_index_layout = QVBoxLayout(export_index_group)
@@ -575,6 +577,69 @@ class MainWindow(QMainWindow):
         alert_type_threshold_row.addWidget(self.alert_error_threshold_ugv_spin)
         alert_layout.addLayout(alert_type_threshold_row)
 
+        alert_id_threshold_row = QHBoxLayout()
+        self.alert_use_id_threshold_checkbox = QCheckBox("按平台ID阈值覆盖")
+        self.alert_use_id_threshold_checkbox.setChecked(False)
+        self.alert_use_id_threshold_checkbox.toggled.connect(self.on_alert_id_threshold_mode_toggled)
+        alert_id_threshold_row.addWidget(self.alert_use_id_threshold_checkbox)
+        alert_layout.addLayout(alert_id_threshold_row)
+
+        alert_id_threshold_editor_row = QHBoxLayout()
+        alert_id_threshold_editor_row.addWidget(QLabel("平台ID"))
+        self.alert_id_threshold_id_edit = QLineEdit()
+        self.alert_id_threshold_id_edit.setPlaceholderText("例如 UAV1")
+        self.alert_id_threshold_id_edit.setClearButtonEnabled(True)
+        self.alert_id_threshold_id_edit.setEnabled(False)
+        alert_id_threshold_editor_row.addWidget(self.alert_id_threshold_id_edit)
+
+        alert_id_threshold_editor_row.addWidget(QLabel("阈值(m)"))
+        self.alert_id_threshold_value_spin = QDoubleSpinBox()
+        self.alert_id_threshold_value_spin.setDecimals(1)
+        self.alert_id_threshold_value_spin.setRange(0.1, 50.0)
+        self.alert_id_threshold_value_spin.setSingleStep(0.5)
+        self.alert_id_threshold_value_spin.setValue(4.0)
+        self.alert_id_threshold_value_spin.setEnabled(False)
+        alert_id_threshold_editor_row.addWidget(self.alert_id_threshold_value_spin)
+
+        set_alert_id_threshold_button = QPushButton("设置/更新")
+        set_alert_id_threshold_button.clicked.connect(self.on_set_alert_id_threshold)
+        set_alert_id_threshold_button.setEnabled(False)
+        self.set_alert_id_threshold_button = set_alert_id_threshold_button
+        alert_id_threshold_editor_row.addWidget(set_alert_id_threshold_button)
+
+        remove_alert_id_threshold_button = QPushButton("删除选中")
+        remove_alert_id_threshold_button.clicked.connect(self.on_remove_selected_alert_id_threshold)
+        remove_alert_id_threshold_button.setEnabled(False)
+        self.remove_alert_id_threshold_button = remove_alert_id_threshold_button
+        alert_id_threshold_editor_row.addWidget(remove_alert_id_threshold_button)
+        alert_layout.addLayout(alert_id_threshold_editor_row)
+
+        self.alert_id_threshold_table = QTableWidget(0, 2)
+        self.alert_id_threshold_table.setHorizontalHeaderLabels(["平台ID", "阈值(m)"])
+        self.alert_id_threshold_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.alert_id_threshold_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.alert_id_threshold_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.alert_id_threshold_table.verticalHeader().setVisible(False)
+        self.alert_id_threshold_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.alert_id_threshold_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.alert_id_threshold_table.cellClicked.connect(self.on_alert_id_threshold_row_clicked)
+        self.alert_id_threshold_table.setVisible(False)
+        alert_layout.addWidget(self.alert_id_threshold_table)
+
+        alert_id_threshold_button_row = QHBoxLayout()
+        apply_selected_platform_threshold_button = QPushButton("填入当前选中平台")
+        apply_selected_platform_threshold_button.clicked.connect(self.on_fill_selected_platform_id_for_threshold)
+        apply_selected_platform_threshold_button.setEnabled(False)
+        self.apply_selected_platform_threshold_button = apply_selected_platform_threshold_button
+        alert_id_threshold_button_row.addWidget(apply_selected_platform_threshold_button)
+
+        clear_alert_id_threshold_button = QPushButton("清空ID阈值")
+        clear_alert_id_threshold_button.clicked.connect(self.on_clear_alert_id_thresholds)
+        clear_alert_id_threshold_button.setEnabled(False)
+        self.clear_alert_id_threshold_button = clear_alert_id_threshold_button
+        alert_id_threshold_button_row.addWidget(clear_alert_id_threshold_button)
+        alert_layout.addLayout(alert_id_threshold_button_row)
+
         alert_filter_row = QHBoxLayout()
         alert_filter_row.addWidget(QLabel("级别"))
         self.alert_level_filter_combo = QComboBox()
@@ -665,6 +730,7 @@ class MainWindow(QMainWindow):
         refresh_alert_stats_button.clicked.connect(self.update_alert_statistics)
         alert_button_row.addWidget(refresh_alert_stats_button)
         alert_layout.addLayout(alert_button_row)
+        self.refresh_alert_id_threshold_table()
 
         self.right_tabs = QTabWidget()
         self.right_tabs.setDocumentMode(True)
@@ -859,6 +925,91 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("已切换为统一误差阈值")
         self._save_ui_state()
 
+    def on_alert_id_threshold_mode_toggled(self, enabled: bool) -> None:
+        self.alert_id_threshold_id_edit.setEnabled(enabled)
+        self.alert_id_threshold_value_spin.setEnabled(enabled)
+        self.set_alert_id_threshold_button.setEnabled(enabled)
+        self.remove_alert_id_threshold_button.setEnabled(enabled)
+        self.apply_selected_platform_threshold_button.setEnabled(enabled)
+        self.clear_alert_id_threshold_button.setEnabled(enabled)
+        self.alert_id_threshold_table.setVisible(enabled)
+        if enabled:
+            self.status_bar.showMessage("已启用按平台ID阈值覆盖")
+        else:
+            self.status_bar.showMessage("已关闭按平台ID阈值覆盖")
+        self._save_ui_state()
+
+    def _normalize_threshold_platform_id(self, platform_id: str) -> str:
+        return platform_id.strip()
+
+    def on_fill_selected_platform_id_for_threshold(self) -> None:
+        selected = self.map_view.get_selected_platform_info()
+        if selected is None:
+            self.status_bar.showMessage("当前未选中平台")
+            return
+        self.alert_id_threshold_id_edit.setText(str(selected.id))
+
+    def on_alert_id_threshold_row_clicked(self, row: int, _col: int) -> None:
+        id_item = self.alert_id_threshold_table.item(row, 0)
+        value_item = self.alert_id_threshold_table.item(row, 1)
+        if id_item is None or value_item is None:
+            return
+        self.alert_id_threshold_id_edit.setText(id_item.text())
+        try:
+            self.alert_id_threshold_value_spin.setValue(float(value_item.text()))
+        except ValueError:
+            return
+
+    def on_set_alert_id_threshold(self) -> None:
+        platform_id = self._normalize_threshold_platform_id(self.alert_id_threshold_id_edit.text())
+        if not platform_id:
+            self.status_bar.showMessage("请输入平台ID")
+            return
+        threshold = self.alert_id_threshold_value_spin.value()
+        self.alert_id_threshold_overrides[platform_id] = threshold
+        self.refresh_alert_id_threshold_table(select_platform_id=platform_id)
+        self.status_bar.showMessage(f"已设置平台阈值: {platform_id} -> {threshold:.1f} m")
+        self._save_ui_state()
+
+    def on_remove_selected_alert_id_threshold(self) -> None:
+        selected_rows = self.alert_id_threshold_table.selectionModel().selectedRows()
+        if not selected_rows:
+            self.status_bar.showMessage("未选中平台阈值")
+            return
+        row = selected_rows[0].row()
+        id_item = self.alert_id_threshold_table.item(row, 0)
+        if id_item is None:
+            return
+        platform_id = id_item.text()
+        if platform_id in self.alert_id_threshold_overrides:
+            self.alert_id_threshold_overrides.pop(platform_id, None)
+            self.refresh_alert_id_threshold_table()
+            self.status_bar.showMessage(f"已删除平台阈值: {platform_id}")
+            self._save_ui_state()
+
+    def on_clear_alert_id_thresholds(self) -> None:
+        self.alert_id_threshold_overrides.clear()
+        self.refresh_alert_id_threshold_table()
+        self.status_bar.showMessage("已清空全部平台ID阈值")
+        self._save_ui_state()
+
+    def refresh_alert_id_threshold_table(self, select_platform_id: str | None = None) -> None:
+        rows = sorted(self.alert_id_threshold_overrides.items(), key=lambda item: item[0])
+        blocker = QSignalBlocker(self.alert_id_threshold_table)
+        try:
+            self.alert_id_threshold_table.setRowCount(0)
+            focus_row: int | None = None
+            for row, (platform_id, threshold) in enumerate(rows):
+                if select_platform_id is not None and platform_id == select_platform_id:
+                    focus_row = row
+                self.alert_id_threshold_table.insertRow(row)
+                self.alert_id_threshold_table.setItem(row, 0, QTableWidgetItem(platform_id))
+                self.alert_id_threshold_table.setItem(row, 1, QTableWidgetItem(f"{threshold:.2f}"))
+            if focus_row is not None:
+                self.alert_id_threshold_table.selectRow(focus_row)
+        finally:
+            del blocker
+
     def _error_threshold_for_platform_type(self, platform_type: str) -> float:
         if not self.alert_use_type_threshold_checkbox.isChecked():
             return self.alert_error_threshold_spin.value()
@@ -868,6 +1019,19 @@ class MainWindow(QMainWindow):
         if normalized_type == "UGV":
             return self.alert_error_threshold_ugv_spin.value()
         return self.alert_error_threshold_spin.value()
+
+    def _error_threshold_for_platform(self, platform_id: str, platform_type: str) -> tuple[float, str]:
+        normalized_id = self._normalize_threshold_platform_id(platform_id)
+        if self.alert_use_id_threshold_checkbox.isChecked():
+            threshold = self.alert_id_threshold_overrides.get(normalized_id)
+            if threshold is not None:
+                return threshold, f"ID阈值({normalized_id})"
+
+        if self.alert_use_type_threshold_checkbox.isChecked():
+            threshold = self._error_threshold_for_platform_type(platform_type)
+            return threshold, f"类型阈值({platform_type.upper()})"
+
+        return self.alert_error_threshold_spin.value(), "统一阈值"
 
     def on_stale_timeout_changed(self, value: float) -> None:
         self.platform_manager.set_stale_timeout(value)
@@ -1249,18 +1413,16 @@ class MainWindow(QMainWindow):
             if state.truth_x is None or state.truth_y is None:
                 continue
             planar_error = math.hypot(state.x - state.truth_x, state.y - state.truth_y)
-            error_threshold = self._error_threshold_for_platform_type(state.type)
+            error_threshold, threshold_scope = self._error_threshold_for_platform(
+                state.id,
+                state.type,
+            )
             if planar_error <= error_threshold:
                 continue
             last_alert_ts = self.last_error_alert_timestamp_by_id.get(state.id, -1e9)
             if state.timestamp - last_alert_ts < 1.5:
                 continue
             self.last_error_alert_timestamp_by_id[state.id] = state.timestamp
-            threshold_scope = (
-                f"{state.type}阈值"
-                if self.alert_use_type_threshold_checkbox.isChecked()
-                else "统一阈值"
-            )
             self._append_alert(
                 "WARN",
                 state.id,
@@ -1675,6 +1837,9 @@ class MainWindow(QMainWindow):
             self.alert_use_type_threshold_checkbox.setChecked(state.alert_use_type_threshold)
             self.alert_error_threshold_uav_spin.setValue(state.alert_error_threshold_uav)
             self.alert_error_threshold_ugv_spin.setValue(state.alert_error_threshold_ugv)
+            self.alert_use_id_threshold_checkbox.setChecked(state.alert_use_id_threshold)
+            self.alert_id_threshold_overrides = dict(state.alert_id_threshold_overrides)
+            self.refresh_alert_id_threshold_table()
 
             sort_column = state.platform_sort_column
             try:
@@ -1714,6 +1879,8 @@ class MainWindow(QMainWindow):
             alert_use_type_threshold=self.alert_use_type_threshold_checkbox.isChecked(),
             alert_error_threshold_uav=self.alert_error_threshold_uav_spin.value(),
             alert_error_threshold_ugv=self.alert_error_threshold_ugv_spin.value(),
+            alert_use_id_threshold=self.alert_use_id_threshold_checkbox.isChecked(),
+            alert_id_threshold_overrides=dict(self.alert_id_threshold_overrides),
         )
         save_ui_state(self._ui_state_store_path(), state)
 
@@ -2140,7 +2307,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "关于",
-            "205_nav_ui 原型（第三十三步）\n\n"
+            "205_nav_ui 原型（第三十五步）\n\n"
             "当前功能：\n"
             "- UAV/UGV 不同图形显示\n"
             "- 平台状态统一dataclass（含在线与真值预留字段）\n"
@@ -2168,6 +2335,7 @@ class MainWindow(QMainWindow):
             "- 速度矢量显示开关\n"
             "- 速度矢量样式区分UAV/UGV\n"
             "- 误差告警阈值支持统一/按类型配置\n"
+            "- 误差告警阈值支持按平台ID覆盖\n"
             "- 回放时间轴拖动定位\n"
             "- 平台列表联动选中与定位\n"
             "- 数据新鲜度告警（超时灰显）\n"

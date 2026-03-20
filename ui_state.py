@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -30,9 +31,12 @@ def _as_bool(value: Any, default: bool) -> bool:
 
 def _as_float(value: Any, default: float) -> float:
     try:
-        return float(value)
+        parsed = float(value)
     except (TypeError, ValueError):
         return default
+    if not math.isfinite(parsed):
+        return default
+    return parsed
 
 
 def _as_int(value: Any, default: int) -> int:
@@ -66,6 +70,8 @@ class UiState:
     alert_use_type_threshold: bool = False
     alert_error_threshold_uav: float = 4.0
     alert_error_threshold_ugv: float = 4.0
+    alert_use_id_threshold: bool = False
+    alert_id_threshold_overrides: dict[str, float] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "UiState":
@@ -116,6 +122,22 @@ class UiState:
             data.get("alert_error_threshold_ugv"),
             state.alert_error_threshold_ugv,
         )
+        state.alert_use_id_threshold = _as_bool(
+            data.get("alert_use_id_threshold"),
+            state.alert_use_id_threshold,
+        )
+
+        raw_overrides = data.get("alert_id_threshold_overrides", {})
+        parsed_overrides: dict[str, float] = {}
+        if isinstance(raw_overrides, dict):
+            for platform_id, threshold in raw_overrides.items():
+                if not isinstance(platform_id, str):
+                    continue
+                normalized_id = platform_id.strip()
+                if not normalized_id:
+                    continue
+                parsed_overrides[normalized_id] = _as_float(threshold, 4.0)
+        state.alert_id_threshold_overrides = parsed_overrides
         return state
 
     def to_dict(self) -> dict[str, Any]:
@@ -140,6 +162,8 @@ class UiState:
             "alert_use_type_threshold": self.alert_use_type_threshold,
             "alert_error_threshold_uav": self.alert_error_threshold_uav,
             "alert_error_threshold_ugv": self.alert_error_threshold_ugv,
+            "alert_use_id_threshold": self.alert_use_id_threshold,
+            "alert_id_threshold_overrides": dict(self.alert_id_threshold_overrides),
         }
 
 
