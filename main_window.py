@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSlider,
     QSplitter,
     QStatusBar,
     QTabWidget,
@@ -71,6 +72,7 @@ class MainWindow(QMainWindow):
         self.replay_frames: list[list[PlatformState]] = []
         self.replay_frame_index = 0
         self.replay_file_path: Path | None = None
+        self._syncing_replay_slider = False
         self.alert_max_rows = 400
         self.last_stale_platform_ids: set[str] = set()
         self.last_error_alert_timestamp_by_id: dict[str, float] = {}
@@ -176,6 +178,17 @@ class MainWindow(QMainWindow):
         self.truth_track_checkbox.toggled.connect(self.map_view.set_show_truth_tracks)
         display_layout.addWidget(self.truth_track_checkbox)
 
+        track_duration_row = QHBoxLayout()
+        track_duration_row.addWidget(QLabel("轨迹时间窗(s)"))
+        self.track_duration_spin = QDoubleSpinBox()
+        self.track_duration_spin.setDecimals(1)
+        self.track_duration_spin.setRange(1.0, 120.0)
+        self.track_duration_spin.setSingleStep(1.0)
+        self.track_duration_spin.setValue(self.map_view.track_duration_sec)
+        self.track_duration_spin.valueChanged.connect(self.on_track_duration_changed)
+        track_duration_row.addWidget(self.track_duration_spin)
+        display_layout.addLayout(track_duration_row)
+
         clear_track_button = QPushButton("清除轨迹")
         clear_track_button.clicked.connect(self.map_view.clear_tracks)
         display_layout.addWidget(clear_track_button)
@@ -251,6 +264,8 @@ class MainWindow(QMainWindow):
         help_layout.addWidget(QLabel("25. 支持多选导出文件批量打开与清理"))
         help_layout.addWidget(QLabel("26. 支持录制实时数据并加载文件回放"))
         help_layout.addWidget(QLabel("27. 支持告警中心与告警确认/清理"))
+        help_layout.addWidget(QLabel("28. 轨迹时间窗可在线调节"))
+        help_layout.addWidget(QLabel("29. 回放支持时间轴拖动定位"))
 
         export_index_group = QGroupBox("导出索引")
         export_index_layout = QVBoxLayout(export_index_group)
@@ -403,6 +418,19 @@ class MainWindow(QMainWindow):
         replay_layout = QVBoxLayout(replay_group)
         self.replay_status_label = QLabel("模式: 实时")
         replay_layout.addWidget(self.replay_status_label)
+
+        self.replay_file_label = QLabel("文件: --")
+        replay_layout.addWidget(self.replay_file_label)
+
+        self.replay_frame_label = QLabel("帧: --/--")
+        replay_layout.addWidget(self.replay_frame_label)
+
+        self.replay_slider = QSlider(Qt.Orientation.Horizontal)
+        self.replay_slider.setEnabled(False)
+        self.replay_slider.setMinimum(0)
+        self.replay_slider.setMaximum(0)
+        self.replay_slider.valueChanged.connect(self.on_replay_slider_changed)
+        replay_layout.addWidget(self.replay_slider)
 
         start_record_button = QPushButton("开始录制")
         start_record_button.clicked.connect(self.on_start_recording)
@@ -646,6 +674,10 @@ class MainWindow(QMainWindow):
         self.map_view.set_follow_selected(enabled)
         self.follow_lock_checkbox.setEnabled(enabled)
 
+    def on_track_duration_changed(self, duration_sec: float) -> None:
+        self.map_view.set_track_duration(duration_sec)
+        self.status_bar.showMessage(f"已设置轨迹时间窗: {duration_sec:.1f}s")
+
     def on_stale_timeout_changed(self, value: float) -> None:
         self.platform_manager.set_stale_timeout(value)
         self.map_view.set_stale_platforms(self.platform_manager.get_stale_platform_ids())
@@ -791,6 +823,9 @@ class MainWindow(QMainWindow):
         self.recorded_frames = []
         self.is_recording = True
         self.replay_status_label.setText("模式: 实时录制中")
+        self.replay_file_label.setText("文件: --")
+        self.replay_frame_label.setText("帧: --/--")
+        self._set_replay_slider_state(enabled=False, max_index=0, value=0)
         self.status_bar.showMessage("已开始录制实时数据")
 
     def on_stop_recording_and_save(self) -> None:
@@ -800,6 +835,7 @@ class MainWindow(QMainWindow):
         self.is_recording = False
         if not self.recorded_frames:
             self.replay_status_label.setText("模式: 实时")
+            self.replay_frame_label.setText("帧: --/--")
             self.status_bar.showMessage("录制为空，未生成文件")
             return
 
@@ -817,6 +853,7 @@ class MainWindow(QMainWindow):
             return
 
         self.replay_status_label.setText("模式: 实时")
+        self.replay_frame_label.setText(f"帧: 0/{len(self.recorded_frames)}")
         self.refresh_export_index(focus_path=file_path)
         self.status_bar.showMessage(
             f"录制完成并保存: {file_path} | 帧数: {len(self.recorded_frames)}"
@@ -864,9 +901,10 @@ class MainWindow(QMainWindow):
         self.replay_frames = loaded_frames
         self.replay_frame_index = 0
         self.replay_file_path = file_path
-        self.replay_status_label.setText(
-            f"模式: 回放 {self.replay_frame_index}/{len(self.replay_frames)}"
-        )
+        self.replay_status_label.setText("模式: 回放")
+        self.replay_file_label.setText(f"文件: {file_path.name}")
+        self._set_replay_slider_state(enabled=True, max_index=len(self.replay_frames) - 1, value=0)
+        self.replay_frame_label.setText(f"帧: 0/{len(self.replay_frames)}")
         self._reset_platform_runtime()
         self._advance_replay_frame(status_prefix="回放加载")
         self.status_bar.showMessage(f"已加载回放文件: {file_path}")
@@ -880,6 +918,9 @@ class MainWindow(QMainWindow):
         self.replay_frame_index = 0
         self.replay_file_path = None
         self.replay_status_label.setText("模式: 实时")
+        self.replay_file_label.setText("文件: --")
+        self.replay_frame_label.setText("帧: --/--")
+        self._set_replay_slider_state(enabled=False, max_index=0, value=0)
         self._reset_platform_runtime()
         self._load_initial_data()
         self.status_bar.showMessage("已退出回放模式并恢复实时数据")
@@ -912,16 +953,39 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("回放结束")
             return False
 
-        frame = self.replay_frames[self.replay_frame_index]
+        current_index = self.replay_frame_index
+        frame = self.replay_frames[current_index]
         self._apply_frame_update(
             frame,
-            status_prefix=f"{status_prefix} {self.replay_frame_index + 1}/{len(self.replay_frames)}",
+            status_prefix=f"{status_prefix} {current_index + 1}/{len(self.replay_frames)}",
         )
         self.replay_frame_index += 1
-        self.replay_status_label.setText(
-            f"模式: 回放 {self.replay_frame_index}/{len(self.replay_frames)}"
-        )
+        self._update_replay_progress(current_index)
         return True
+
+    def on_replay_slider_changed(self, value: int) -> None:
+        if self._syncing_replay_slider or not self.is_replay_mode:
+            return
+        if value < 0 or value >= len(self.replay_frames):
+            return
+        self.replay_frame_index = value
+        self._advance_replay_frame(status_prefix="回放定位")
+
+    def _set_replay_slider_state(self, enabled: bool, max_index: int, value: int) -> None:
+        self._syncing_replay_slider = True
+        try:
+            self.replay_slider.setEnabled(enabled)
+            self.replay_slider.setMinimum(0)
+            self.replay_slider.setMaximum(max(0, max_index))
+            self.replay_slider.setValue(max(0, min(value, max(0, max_index))))
+        finally:
+            self._syncing_replay_slider = False
+
+    def _update_replay_progress(self, current_index: int) -> None:
+        total = len(self.replay_frames)
+        self.replay_status_label.setText("模式: 回放")
+        self.replay_frame_label.setText(f"帧: {current_index + 1}/{total}")
+        self._set_replay_slider_state(enabled=True, max_index=total - 1, value=current_index)
 
     def _state_from_dict(self, raw_item: dict) -> PlatformState | None:
         if not isinstance(raw_item, dict):
@@ -1472,7 +1536,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "关于",
-            "205_nav_ui 原型（第二十七步）\n\n"
+            "205_nav_ui 原型（第二十八步）\n\n"
             "当前功能：\n"
             "- UAV/UGV 不同图形显示\n"
             "- 平台状态统一dataclass（含在线与真值预留字段）\n"
@@ -1487,6 +1551,8 @@ class MainWindow(QMainWindow):
             "- 实时数据录制与文件回放\n"
             "- 告警中心（超时/下线/误差超阈）\n"
             "- 告警确认与清理\n"
+            "- 轨迹时间窗可在线调节\n"
+            "- 回放时间轴拖动定位\n"
             "- 平台列表联动选中与定位\n"
             "- 数据新鲜度告警（超时灰显）\n"
             "- 下线平台自动移除（图元/轨迹/列表）\n"

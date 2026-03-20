@@ -28,9 +28,11 @@ class MapView(QGraphicsView):
         self.latest_platform_info: dict[str, PlatformState] = {}
         self.track_items: dict[str, QGraphicsPathItem] = {}
         self.track_history: dict[str, list[QPointF]] = {}
+        self.track_time_history: dict[str, list[float]] = {}
         self.truth_items: dict[str, QGraphicsEllipseItem] = {}
         self.truth_track_items: dict[str, QGraphicsPathItem] = {}
         self.truth_track_history: dict[str, list[QPointF]] = {}
+        self.truth_track_time_history: dict[str, list[float]] = {}
         self.planar_error_history: dict[str, list[float]] = {}
         self.stale_platform_ids: set[str] = set()
         self.selected_platform_id: str | None = None
@@ -40,7 +42,8 @@ class MapView(QGraphicsView):
         self.show_truth_tracks = True
         self.follow_selected = False
         self.lock_pan_when_follow = True
-        self.max_track_points = 120
+        self.track_duration_sec = 12.0
+        self.max_track_points = 2000
 
         self.scene = QGraphicsScene(self)
         self.scene.setSceneRect(-400, -300, 800, 600)
@@ -162,6 +165,9 @@ class MapView(QGraphicsView):
         self.track_history[platform_info.id] = [
             QPointF(platform_info.x, platform_info.y)
         ]
+        self.track_time_history[platform_info.id] = [platform_info.timestamp]
+        self._trim_estimated_track(platform_info.id)
+        self._refresh_estimated_track_path(platform_info.id)
 
         truth_item = QGraphicsEllipseItem(-5, -5, 10, 10)
         truth_item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
@@ -177,9 +183,23 @@ class MapView(QGraphicsView):
         truth_track_item.setZValue(-1.2)
         self.scene.addItem(truth_track_item)
         self.truth_track_items[platform_info.id] = truth_track_item
-        self.truth_track_history[platform_info.id] = []
-        self.planar_error_history[platform_info.id] = []
-        self._update_truth_track(platform_info.id, platform_info)
+        truth_history: list[QPointF] = []
+        truth_time_history: list[float] = []
+        error_history: list[float] = []
+        if platform_info.truth_x is not None and platform_info.truth_y is not None:
+            truth_history.append(QPointF(platform_info.truth_x, platform_info.truth_y))
+            truth_time_history.append(platform_info.timestamp)
+            error_history.append(
+                math.hypot(
+                    platform_info.x - platform_info.truth_x,
+                    platform_info.y - platform_info.truth_y,
+                )
+            )
+        self.truth_track_history[platform_info.id] = truth_history
+        self.truth_track_time_history[platform_info.id] = truth_time_history
+        self.planar_error_history[platform_info.id] = error_history
+        self._trim_truth_track(platform_info.id)
+        self._refresh_truth_track_path(platform_info.id)
 
     def update_platform(self, platform_info: PlatformState) -> None:
         platform_id = platform_info.id
@@ -195,31 +215,33 @@ class MapView(QGraphicsView):
         )
 
         self.latest_platform_info[platform_id] = platform_info
-        self._update_track(platform_id, platform_info.x, platform_info.y)
+        self._update_track(
+            platform_id,
+            platform_info.x,
+            platform_info.y,
+            platform_info.timestamp,
+        )
         self._update_truth_marker(platform_id, platform_info)
         self._update_truth_track(platform_id, platform_info)
 
-    def _update_track(self, platform_id: str, x: float, y: float) -> None:
+    def _update_track(
+        self,
+        platform_id: str,
+        x: float,
+        y: float,
+        timestamp: float,
+    ) -> None:
         if platform_id not in self.track_history:
             self.track_history[platform_id] = []
+        if platform_id not in self.track_time_history:
+            self.track_time_history[platform_id] = []
 
         history = self.track_history[platform_id]
+        time_history = self.track_time_history[platform_id]
         history.append(QPointF(x, y))
-
-        if len(history) > self.max_track_points:
-            history.pop(0)
-
-        track_item = self.track_items[platform_id]
-        if not self.show_tracks or len(history) < 2:
-            track_item.setPath(QPainterPath())
-            return
-
-        path = QPainterPath()
-        path.moveTo(history[0])
-        for point in history[1:]:
-            path.lineTo(point)
-
-        track_item.setPath(path)
+        time_history.append(timestamp)
+        self._trim_estimated_track(platform_id)
+        self._refresh_estimated_track_path(platform_id)
 
     def update_platforms(self, platform_list: list[PlatformState]) -> None:
         for platform_info in platform_list:
@@ -303,17 +325,7 @@ class MapView(QGraphicsView):
 
     def set_show_tracks(self, show: bool) -> None:
         self.show_tracks = show
-        for platform_id, item in self.track_items.items():
-            if not show:
-                item.setPath(QPainterPath())
-            else:
-                history = self.track_history.get(platform_id, [])
-                if len(history) >= 2:
-                    path = QPainterPath()
-                    path.moveTo(history[0])
-                    for point in history[1:]:
-                        path.lineTo(point)
-                    item.setPath(path)
+        self._refresh_all_estimated_track_paths()
 
     def set_show_labels(self, show: bool) -> None:
         self.show_labels = show
@@ -332,19 +344,16 @@ class MapView(QGraphicsView):
 
     def set_show_truth_tracks(self, show: bool) -> None:
         self.show_truth_tracks = show
-        for platform_id, track_item in self.truth_track_items.items():
-            if not show:
-                track_item.setPath(QPainterPath())
-                continue
-            history = self.truth_track_history.get(platform_id, [])
-            if len(history) < 2:
-                track_item.setPath(QPainterPath())
-                continue
-            path = QPainterPath()
-            path.moveTo(history[0])
-            for point in history[1:]:
-                path.lineTo(point)
-            track_item.setPath(path)
+        self._refresh_all_truth_track_paths()
+
+    def set_track_duration(self, duration_sec: float) -> None:
+        self.track_duration_sec = max(0.5, duration_sec)
+        for platform_id in self.track_history:
+            self._trim_estimated_track(platform_id)
+        for platform_id in self.truth_track_history:
+            self._trim_truth_track(platform_id)
+        self._refresh_all_estimated_track_paths()
+        self._refresh_all_truth_track_paths()
 
     def set_follow_selected(self, follow: bool) -> None:
         self.follow_selected = follow
@@ -411,16 +420,21 @@ class MapView(QGraphicsView):
     def clear_tracks(self) -> None:
         for platform_id in self.track_history:
             current_item = self.platform_items[platform_id]
+            state = self.latest_platform_info.get(platform_id)
+            current_ts = state.timestamp if state is not None else 0.0
             self.track_history[platform_id] = [QPointF(current_item.x_val, current_item.y_val)]
+            self.track_time_history[platform_id] = [current_ts]
             self.track_items[platform_id].setPath(QPainterPath())
 
-            state = self.latest_platform_info.get(platform_id)
             truth_history: list[QPointF] = []
+            truth_time_history: list[float] = []
             error_history: list[float] = []
             if state is not None and state.truth_x is not None and state.truth_y is not None:
                 truth_history.append(QPointF(state.truth_x, state.truth_y))
+                truth_time_history.append(state.timestamp)
                 error_history.append(math.hypot(state.x - state.truth_x, state.y - state.truth_y))
             self.truth_track_history[platform_id] = truth_history
+            self.truth_track_time_history[platform_id] = truth_time_history
             self.planar_error_history[platform_id] = error_history
             truth_track_item = self.truth_track_items.get(platform_id)
             if truth_track_item is not None:
@@ -490,7 +504,9 @@ class MapView(QGraphicsView):
             self.scene.removeItem(truth_item)
 
         self.track_history.pop(platform_id, None)
+        self.track_time_history.pop(platform_id, None)
         self.truth_track_history.pop(platform_id, None)
+        self.truth_track_time_history.pop(platform_id, None)
         self.planar_error_history.pop(platform_id, None)
         self.latest_platform_info.pop(platform_id, None)
         self.stale_platform_ids.discard(platform_id)
@@ -510,9 +526,15 @@ class MapView(QGraphicsView):
 
     def _update_truth_track(self, platform_id: str, platform_info: PlatformState) -> None:
         history = self.truth_track_history.get(platform_id)
+        time_history = self.truth_track_time_history.get(platform_id)
         track_item = self.truth_track_items.get(platform_id)
         error_history = self.planar_error_history.get(platform_id)
-        if history is None or track_item is None or error_history is None:
+        if (
+            history is None
+            or time_history is None
+            or track_item is None
+            or error_history is None
+        ):
             return
 
         if platform_info.truth_x is None or platform_info.truth_y is None:
@@ -520,18 +542,98 @@ class MapView(QGraphicsView):
             return
 
         history.append(QPointF(platform_info.truth_x, platform_info.truth_y))
-        error_history.append(math.hypot(platform_info.x - platform_info.truth_x, platform_info.y - platform_info.truth_y))
-        if len(history) > self.max_track_points:
-            history.pop(0)
-        if len(error_history) > self.max_track_points:
-            error_history.pop(0)
+        time_history.append(platform_info.timestamp)
+        error_history.append(
+            math.hypot(
+                platform_info.x - platform_info.truth_x,
+                platform_info.y - platform_info.truth_y,
+            )
+        )
+        self._trim_truth_track(platform_id)
+        self._refresh_truth_track_path(platform_id)
 
-        if not self.show_truth_tracks or len(history) < 2:
-            track_item.setPath(QPainterPath())
+    def _trim_estimated_track(self, platform_id: str) -> None:
+        history = self.track_history.get(platform_id)
+        time_history = self.track_time_history.get(platform_id)
+        if history is None or time_history is None:
             return
 
+        if not history or not time_history:
+            return
+
+        # Keep paired sequences aligned.
+        if len(history) != len(time_history):
+            min_len = min(len(history), len(time_history))
+            history[:] = history[-min_len:]
+            time_history[:] = time_history[-min_len:]
+
+        while len(history) > self.max_track_points:
+            history.pop(0)
+            time_history.pop(0)
+
+        cutoff_time = time_history[-1] - self.track_duration_sec
+        while len(time_history) > 1 and time_history[1] < cutoff_time:
+            history.pop(0)
+            time_history.pop(0)
+
+    def _trim_truth_track(self, platform_id: str) -> None:
+        history = self.truth_track_history.get(platform_id)
+        time_history = self.truth_track_time_history.get(platform_id)
+        error_history = self.planar_error_history.get(platform_id)
+        if history is None or time_history is None or error_history is None:
+            return
+
+        if not history or not time_history:
+            return
+
+        min_len = min(len(history), len(time_history), len(error_history))
+        history[:] = history[-min_len:]
+        time_history[:] = time_history[-min_len:]
+        error_history[:] = error_history[-min_len:]
+
+        while len(history) > self.max_track_points:
+            history.pop(0)
+            time_history.pop(0)
+            error_history.pop(0)
+
+        cutoff_time = time_history[-1] - self.track_duration_sec
+        while len(time_history) > 1 and time_history[1] < cutoff_time:
+            history.pop(0)
+            time_history.pop(0)
+            error_history.pop(0)
+
+    def _refresh_estimated_track_path(self, platform_id: str) -> None:
+        track_item = self.track_items.get(platform_id)
+        history = self.track_history.get(platform_id, [])
+        if track_item is None:
+            return
+        if not self.show_tracks or len(history) < 2:
+            track_item.setPath(QPainterPath())
+            return
         path = QPainterPath()
         path.moveTo(history[0])
         for point in history[1:]:
             path.lineTo(point)
         track_item.setPath(path)
+
+    def _refresh_truth_track_path(self, platform_id: str) -> None:
+        track_item = self.truth_track_items.get(platform_id)
+        history = self.truth_track_history.get(platform_id, [])
+        if track_item is None:
+            return
+        if not self.show_truth_tracks or len(history) < 2:
+            track_item.setPath(QPainterPath())
+            return
+        path = QPainterPath()
+        path.moveTo(history[0])
+        for point in history[1:]:
+            path.lineTo(point)
+        track_item.setPath(path)
+
+    def _refresh_all_estimated_track_paths(self) -> None:
+        for platform_id in self.track_items:
+            self._refresh_estimated_track_path(platform_id)
+
+    def _refresh_all_truth_track_paths(self) -> None:
+        for platform_id in self.truth_track_items:
+            self._refresh_truth_track_path(platform_id)
