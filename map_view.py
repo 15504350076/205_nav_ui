@@ -393,6 +393,14 @@ class MapView(QGraphicsView):
             return None
         return self.get_platform_error_metrics(self.selected_platform_id)
 
+    def get_platform_error_series(self, platform_id: str) -> list[float]:
+        return list(self.planar_error_history.get(platform_id, []))
+
+    def get_selected_error_series(self) -> list[float]:
+        if self.selected_platform_id is None:
+            return []
+        return self.get_platform_error_series(self.selected_platform_id)
+
     def clear_tracks(self) -> None:
         for platform_id in self.track_history:
             current_item = self.platform_items[platform_id]

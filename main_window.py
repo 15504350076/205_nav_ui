@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 from fake_data import FakeDataGenerator
 from map_view import MapView
 from data_source import PlatformDataSource
+from error_plot_widget import ErrorPlotWidget
 from models import PlatformState
 from platform_manager import PlatformManager
 
@@ -53,6 +54,7 @@ class MainWindow(QMainWindow):
         self.truth_error_label = QLabel("--")
         self.truth_rms_error_label = QLabel("--")
         self.timestamp_label = QLabel("--")
+        self.error_plot_widget = ErrorPlotWidget()
         self.platform_row_by_id: dict[str, int] = {}
         self._syncing_table_selection = False
         self.base_timer_interval_ms = 100
@@ -101,6 +103,10 @@ class MainWindow(QMainWindow):
         form_layout.addRow("平面误差:", self.truth_error_label)
         form_layout.addRow("轨迹RMS误差:", self.truth_rms_error_label)
         form_layout.addRow("时间戳:", self.timestamp_label)
+
+        error_group = QGroupBox("误差曲线（选中平台）")
+        error_layout = QVBoxLayout(error_group)
+        error_layout.addWidget(self.error_plot_widget)
 
         list_group = QGroupBox("平台列表")
         list_layout = QVBoxLayout(list_group)
@@ -217,6 +223,7 @@ class MainWindow(QMainWindow):
         help_layout.addWidget(QLabel("14. 平台状态统一为dataclass并集中管理"))
         help_layout.addWidget(QLabel("15. 支持真值点/真值轨迹与误差统计"))
         help_layout.addWidget(QLabel("16. 可一键导出当前态势图截图"))
+        help_layout.addWidget(QLabel("17. 选中平台可查看平面误差曲线"))
 
         button_group = QGroupBox("控制")
         button_layout = QVBoxLayout(button_group)
@@ -263,6 +270,7 @@ class MainWindow(QMainWindow):
         button_layout.addWidget(export_button)
 
         right_layout.addWidget(info_group)
+        right_layout.addWidget(error_group)
         right_layout.addWidget(list_group)
         right_layout.addWidget(display_group)
         right_layout.addWidget(threshold_group)
@@ -339,6 +347,7 @@ class MainWindow(QMainWindow):
             self.truth_rms_error_label.setText("--")
 
         selected_id = str(platform_info.id)
+        self.error_plot_widget.set_series(self.map_view.get_platform_error_series(selected_id))
         stale_count = len(self.platform_manager.get_stale_platform_ids())
         selected_stale = self.platform_manager.is_platform_stale(selected_id)
         selected_state_text = "超时" if selected_stale else "正常"
@@ -530,6 +539,7 @@ class MainWindow(QMainWindow):
         self.truth_error_label.setText("--")
         self.truth_rms_error_label.setText("--")
         self.timestamp_label.setText("--")
+        self.error_plot_widget.clear()
 
     def on_table_selection_changed(self) -> None:
         if self._syncing_table_selection:
@@ -564,13 +574,14 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "关于",
-            "205_nav_ui 原型（第十八步）\n\n"
+            "205_nav_ui 原型（第十九步）\n\n"
             "当前功能：\n"
             "- UAV/UGV 不同图形显示\n"
             "- 平台状态统一dataclass（含在线与真值预留字段）\n"
             "- PlatformManager 集中管理状态/告警/移除\n"
             "- 数据源接口抽象，可替换接入\n"
             "- 真值点/真值轨迹显示与误差可视化（当前+RMS）\n"
+            "- 选中平台误差曲线面板\n"
             "- 平台列表联动选中与定位\n"
             "- 数据新鲜度告警（超时灰显）\n"
             "- 下线平台自动移除（图元/轨迹/列表）\n"
