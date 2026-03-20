@@ -1,8 +1,8 @@
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QSignalBlocker, QTimer, Qt
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtCore import QSignalBlocker, QTimer, Qt, QUrl
+from PySide6.QtGui import QBrush, QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -76,6 +76,7 @@ class MainWindow(QMainWindow):
         self.timer.start(self._current_timer_interval_ms())
 
         self._init_ui()
+        self.refresh_export_index()
         self._load_initial_data()
 
     def _init_ui(self) -> None:
@@ -227,6 +228,37 @@ class MainWindow(QMainWindow):
         help_layout.addWidget(QLabel("17. 选中平台可查看平面误差曲线"))
         help_layout.addWidget(QLabel("18. 可导出选中平台误差CSV与曲线PNG"))
         help_layout.addWidget(QLabel("19. 左右分栏支持鼠标拖拽调宽"))
+        help_layout.addWidget(QLabel("20. 导出索引支持最近文件查看与一键打开"))
+
+        export_index_group = QGroupBox("导出索引")
+        export_index_layout = QVBoxLayout(export_index_group)
+
+        self.export_index_table = QTableWidget(0, 3)
+        self.export_index_table.setHorizontalHeaderLabels(["文件名", "类型", "时间"])
+        self.export_index_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.export_index_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.export_index_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.export_index_table.setAlternatingRowColors(True)
+        self.export_index_table.verticalHeader().setVisible(False)
+        self.export_index_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.export_index_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.export_index_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.export_index_table.cellDoubleClicked.connect(self.on_export_index_double_clicked)
+        export_index_layout.addWidget(self.export_index_table)
+
+        export_index_button_row = QHBoxLayout()
+        open_file_button = QPushButton("打开选中文件")
+        open_file_button.clicked.connect(self.on_open_selected_export)
+        export_index_button_row.addWidget(open_file_button)
+
+        open_dir_button = QPushButton("打开导出目录")
+        open_dir_button.clicked.connect(self.on_open_export_directory)
+        export_index_button_row.addWidget(open_dir_button)
+
+        refresh_export_index_button = QPushButton("刷新索引")
+        refresh_export_index_button.clicked.connect(self.refresh_export_index)
+        export_index_button_row.addWidget(refresh_export_index_button)
+        export_index_layout.addLayout(export_index_button_row)
 
         button_group = QGroupBox("控制")
         button_layout = QVBoxLayout(button_group)
@@ -288,6 +320,7 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(sim_group)
         right_layout.addWidget(help_group)
         right_layout.addWidget(button_group)
+        right_layout.addWidget(export_index_group)
         right_layout.addStretch()
 
         right_scroll.setWidget(right_panel)
@@ -483,6 +516,7 @@ class MainWindow(QMainWindow):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         file_path = export_dir / f"nav_snapshot_{timestamp}.png"
         if self.map_view.export_snapshot(str(file_path)):
+            self.refresh_export_index(focus_path=file_path)
             self.status_bar.showMessage(f"截图已导出: {file_path}")
         else:
             self.status_bar.showMessage("截图导出失败")
@@ -512,6 +546,7 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("误差CSV导出失败")
             return
 
+        self.refresh_export_index(focus_path=file_path)
         self.status_bar.showMessage(f"误差CSV已导出: {file_path}")
 
     def on_export_error_plot(self) -> None:
@@ -531,9 +566,114 @@ class MainWindow(QMainWindow):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         file_path = export_dir / f"{platform_id}_planar_error_{timestamp}.png"
         if self.error_plot_widget.grab().save(str(file_path), "PNG"):
+            self.refresh_export_index(focus_path=file_path)
             self.status_bar.showMessage(f"误差曲线图已导出: {file_path}")
         else:
             self.status_bar.showMessage("误差曲线图导出失败")
+
+    def refresh_export_index(self, focus_path: Path | None = None) -> None:
+        export_root = Path.cwd() / "exports"
+        entries: list[tuple[Path, float]] = []
+
+        if export_root.exists():
+            for path in export_root.rglob("*"):
+                if not path.is_file():
+                    continue
+                try:
+                    mtime = path.stat().st_mtime
+                except OSError:
+                    continue
+                entries.append((path, mtime))
+
+        entries.sort(key=lambda item: item[1], reverse=True)
+        entries = entries[:80]
+
+        focus_row: int | None = None
+        blocker = QSignalBlocker(self.export_index_table)
+        try:
+            self.export_index_table.setRowCount(0)
+            for row, (path, mtime) in enumerate(entries):
+                if focus_path is not None and path == focus_path:
+                    focus_row = row
+                self.export_index_table.insertRow(row)
+
+                name_item = QTableWidgetItem(path.name)
+                name_item.setData(Qt.ItemDataRole.UserRole, str(path))
+                name_item.setToolTip(str(path))
+                self.export_index_table.setItem(row, 0, name_item)
+
+                type_item = QTableWidgetItem(self._infer_export_type(path))
+                self.export_index_table.setItem(row, 1, type_item)
+
+                time_item = QTableWidgetItem(
+                    datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+                )
+                self.export_index_table.setItem(row, 2, time_item)
+        finally:
+            del blocker
+
+        if self.export_index_table.rowCount() == 0:
+            return
+        if focus_row is None:
+            focus_row = 0
+        self.export_index_table.selectRow(focus_row)
+
+    def _infer_export_type(self, path: Path) -> str:
+        file_name = path.name
+        suffix = path.suffix.lower()
+        if file_name.startswith("nav_snapshot_") and suffix == ".png":
+            return "态势截图"
+        if suffix == ".csv":
+            return "误差CSV"
+        if suffix == ".png" and "_planar_error_" in file_name:
+            return "误差曲线PNG"
+        if suffix == ".png":
+            return "PNG"
+        if suffix == ".json":
+            return "JSON"
+        if suffix == ".txt":
+            return "TXT"
+        return "文件"
+
+    def on_export_index_double_clicked(self, row: int, _col: int) -> None:
+        self.export_index_table.selectRow(row)
+        self.on_open_selected_export()
+
+    def on_open_selected_export(self) -> None:
+        selected_rows = self.export_index_table.selectionModel().selectedRows()
+        if not selected_rows:
+            self.status_bar.showMessage("未选中导出文件")
+            return
+
+        row = selected_rows[0].row()
+        name_item = self.export_index_table.item(row, 0)
+        if name_item is None:
+            self.status_bar.showMessage("导出文件信息无效")
+            return
+
+        file_path_raw = name_item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(file_path_raw, str):
+            self.status_bar.showMessage("导出文件路径无效")
+            return
+
+        file_path = Path(file_path_raw)
+        if not file_path.exists():
+            self.refresh_export_index()
+            self.status_bar.showMessage("文件不存在，已刷新导出索引")
+            return
+
+        if QDesktopServices.openUrl(QUrl.fromLocalFile(str(file_path))):
+            self.status_bar.showMessage(f"已打开文件: {file_path}")
+            return
+        self.status_bar.showMessage("打开文件失败")
+
+    def on_open_export_directory(self) -> None:
+        export_dir = Path.cwd() / "exports"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        if QDesktopServices.openUrl(QUrl.fromLocalFile(str(export_dir))):
+            self.status_bar.showMessage(f"已打开导出目录: {export_dir}")
+            return
+        self.status_bar.showMessage("打开导出目录失败")
 
     def _current_timer_interval_ms(self) -> int:
         speed = max(self.playback_speed, 0.1)
@@ -640,7 +780,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "关于",
-            "205_nav_ui 原型（第二十步）\n\n"
+            "205_nav_ui 原型（第二十一步）\n\n"
             "当前功能：\n"
             "- UAV/UGV 不同图形显示\n"
             "- 平台状态统一dataclass（含在线与真值预留字段）\n"
@@ -649,6 +789,7 @@ class MainWindow(QMainWindow):
             "- 真值点/真值轨迹显示与误差可视化（当前+RMS）\n"
             "- 选中平台误差曲线面板\n"
             "- 误差CSV与误差曲线PNG导出\n"
+            "- 导出索引面板（最近导出 + 一键打开）\n"
             "- 平台列表联动选中与定位\n"
             "- 数据新鲜度告警（超时灰显）\n"
             "- 下线平台自动移除（图元/轨迹/列表）\n"
