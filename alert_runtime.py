@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 from typing import Callable
 
 from alert_event import AlertEvent
+from evaluation_service import compute_planar_error_from_state
 from platform_state import PlatformState
 
 
@@ -69,10 +69,9 @@ class RuntimeAlertEngine:
                     self.error_exceed_count_by_id.pop(platform_id, None)
 
             for state in all_platforms:
-                if state.truth_x is None or state.truth_y is None:
+                planar_error = compute_planar_error_from_state(state)
+                if planar_error is None:
                     continue
-
-                planar_error = math.hypot(state.x - state.truth_x, state.y - state.truth_y)
                 platform_id = str(state.id)
                 error_threshold, threshold_scope = threshold_resolver(platform_id, str(state.type))
                 if planar_error <= error_threshold:

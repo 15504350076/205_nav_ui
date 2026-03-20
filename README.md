@@ -117,6 +117,8 @@ PySide6 原型界面，用于无人机（UAV）与无人车（UGV）协同导航
   - 告警筛选判定与分组统计聚合（与UI表格解耦的纯逻辑）
 - `alert_runtime.py`
   - 运行态告警规则引擎（超时/恢复/下线/误差升级）
+- `evaluation_service.py`
+  - 导航估计/真值/评估结果三层解耦与误差/RMS聚合
 - `ui_state.py`
   - 统一管理 UI 筛选/排序/显示开关/阈值配置的序列化与持久化
 - `map_view.py`
@@ -178,6 +180,7 @@ python3 -m pytest -q
 - `tests/test_alert_center.py`
 - `tests/test_alert_event.py`
 - `tests/test_alert_runtime.py`
+- `tests/test_evaluation_service.py`
 - `tests/test_live_data_source.py`
 - `tests/test_main_window_alerts.py`
 - `tests/test_main_window_integration.py`

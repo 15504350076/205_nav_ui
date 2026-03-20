@@ -57,6 +57,7 @@ from alert_history import (
     AlertRecord,
 )
 from alert_center import AlertRow, should_show_alert, summarize_alert_rows
+from evaluation_service import EvaluationService
 from alert_history_service import AlertHistoryService
 from alert_runtime import RuntimeAlertEngine
 from ui_state import UiState, load_ui_state, save_ui_state
@@ -112,6 +113,7 @@ class MainWindow(QMainWindow):
         self._syncing_replay_slider = False
         self.alert_max_rows = 400
         self.runtime_alert_engine = RuntimeAlertEngine()
+        self.evaluation_service = EvaluationService(history_duration_sec=12.0)
         self.alert_id_threshold_overrides: dict[str, float] = {}
         self.last_alert_threshold_import_meta: AlertThresholdConfigFileMeta | None = None
         self._is_restoring_alert_history = False
@@ -284,7 +286,7 @@ class MainWindow(QMainWindow):
         display_layout.addLayout(track_duration_row)
 
         clear_track_button = QPushButton("清除轨迹")
-        clear_track_button.clicked.connect(self.map_view.clear_tracks)
+        clear_track_button.clicked.connect(self.on_clear_tracks)
         display_layout.addWidget(clear_track_button)
 
         threshold_group = QGroupBox("阈值配置")
@@ -1014,6 +1016,7 @@ class MainWindow(QMainWindow):
         stale_ids = self.platform_manager.get_stale_platform_ids()
         self.map_view.update_platforms(all_platforms)
         self.map_view.set_stale_platforms(stale_ids)
+        self.evaluation_service.update(all_platforms)
         self.update_platform_table(all_platforms)
         self._raise_runtime_alerts(all_platforms, stale_ids, removed_ids)
         self.refresh_alert_threshold_preview_table()
@@ -1036,8 +1039,10 @@ class MainWindow(QMainWindow):
         stale_ids = self.platform_manager.get_stale_platform_ids()
         if removed_ids:
             self.map_view.remove_platforms(removed_ids)
+            self.evaluation_service.remove_platforms(removed_ids)
         self.map_view.update_platforms(all_platforms)
         self.map_view.set_stale_platforms(stale_ids)
+        self.evaluation_service.update(all_platforms)
         self.update_platform_table(all_platforms)
         self._raise_runtime_alerts(all_platforms, stale_ids, removed_ids)
         self.refresh_alert_threshold_preview_table()
@@ -1074,18 +1079,18 @@ class MainWindow(QMainWindow):
         self.speed_label.setText(f"{platform_info.speed:.2f}")
         self.timestamp_label.setText(f"{platform_info.timestamp:.2f}")
 
-        error_metrics = self.map_view.get_platform_error_metrics(str(platform_info.id))
-        if error_metrics is not None and error_metrics.get("planar_error") is not None:
-            self.truth_error_label.setText(f'{float(error_metrics["planar_error"]):.2f}')
+        metrics = self.evaluation_service.get_metrics(str(platform_info.id))
+        if metrics is not None and metrics.planar_error is not None:
+            self.truth_error_label.setText(f"{metrics.planar_error:.2f}")
         else:
             self.truth_error_label.setText("--")
-        if error_metrics is not None and error_metrics.get("rms_planar_error") is not None:
-            self.truth_rms_error_label.setText(f'{float(error_metrics["rms_planar_error"]):.2f}')
+        if metrics is not None and metrics.rms_planar_error is not None:
+            self.truth_rms_error_label.setText(f"{metrics.rms_planar_error:.2f}")
         else:
             self.truth_rms_error_label.setText("--")
 
         selected_id = str(platform_info.id)
-        self.error_plot_widget.set_series(self.map_view.get_platform_error_series(selected_id))
+        self.error_plot_widget.set_series(self.evaluation_service.get_error_series(selected_id))
         stale_count = len(self.platform_manager.get_stale_platform_ids())
         selected_stale = self.platform_manager.is_platform_stale(selected_id)
         selected_state_text = "超时" if selected_stale else "正常"
@@ -1129,8 +1134,18 @@ class MainWindow(QMainWindow):
 
     def on_track_duration_changed(self, duration_sec: float) -> None:
         self.map_view.set_track_duration(duration_sec)
+        self.evaluation_service.set_history_duration(duration_sec)
         self.status_bar.showMessage(f"已设置轨迹时间窗: {duration_sec:.1f}s")
         self._save_ui_state()
+
+    def on_clear_tracks(self) -> None:
+        self.map_view.clear_tracks()
+        self.evaluation_service.clear_histories(self.platform_manager.get_all_platforms())
+        selected_info = self.map_view.get_selected_platform_info()
+        if selected_info is not None:
+            self.on_platform_selected(selected_info, status_prefix="轨迹已清除")
+        else:
+            self.status_bar.showMessage("轨迹已清除")
 
     def on_alert_threshold_mode_toggled(self, enabled: bool) -> None:
         self._set_alert_type_threshold_controls_enabled(enabled)
@@ -1734,7 +1749,7 @@ class MainWindow(QMainWindow):
             return
 
         platform_id = str(selected_info.id)
-        series = self.map_view.get_platform_error_series(platform_id)
+        series = self.evaluation_service.get_error_series(platform_id)
         if not series:
             self.status_bar.showMessage("当前平台暂无误差数据")
             return
@@ -1762,7 +1777,7 @@ class MainWindow(QMainWindow):
             return
 
         platform_id = str(selected_info.id)
-        series = self.map_view.get_platform_error_series(platform_id)
+        series = self.evaluation_service.get_error_series(platform_id)
         if len(series) < 2:
             self.status_bar.showMessage("误差数据不足，无法导出曲线图")
             return
@@ -1935,6 +1950,7 @@ class MainWindow(QMainWindow):
         self.platform_table.clearSelection()
         self.clear_selected_platform_info()
         self.map_view.set_stale_platforms(set())
+        self.evaluation_service.reset()
         self.runtime_alert_engine.reset()
 
     def _raise_runtime_alerts(
