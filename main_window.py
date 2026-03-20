@@ -1,3 +1,6 @@
+from datetime import datetime
+from pathlib import Path
+
 from PySide6.QtCore import QSignalBlocker, QTimer
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
@@ -213,6 +216,7 @@ class MainWindow(QMainWindow):
         help_layout.addWidget(QLabel("13. 支持链路掉帧仿真（用于告警联调）"))
         help_layout.addWidget(QLabel("14. 平台状态统一为dataclass并集中管理"))
         help_layout.addWidget(QLabel("15. 支持真值点/真值轨迹与误差统计"))
+        help_layout.addWidget(QLabel("16. 可一键导出当前态势图截图"))
 
         button_group = QGroupBox("控制")
         button_layout = QVBoxLayout(button_group)
@@ -253,6 +257,10 @@ class MainWindow(QMainWindow):
         about_button = QPushButton("关于")
         about_button.clicked.connect(self.show_about)
         button_layout.addWidget(about_button)
+
+        export_button = QPushButton("导出截图")
+        export_button.clicked.connect(self.on_export_snapshot)
+        button_layout.addWidget(export_button)
 
         right_layout.addWidget(info_group)
         right_layout.addWidget(list_group)
@@ -442,6 +450,16 @@ class MainWindow(QMainWindow):
         else:
             self.status_bar.showMessage("未选中平台，已恢复刷新")
 
+    def on_export_snapshot(self) -> None:
+        export_dir = Path.cwd() / "exports"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        file_path = export_dir / f"nav_snapshot_{timestamp}.png"
+        if self.map_view.export_snapshot(str(file_path)):
+            self.status_bar.showMessage(f"截图已导出: {file_path}")
+        else:
+            self.status_bar.showMessage("截图导出失败")
+
     def _current_timer_interval_ms(self) -> int:
         speed = max(self.playback_speed, 0.1)
         return max(10, int(self.base_timer_interval_ms / speed))
@@ -546,7 +564,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "关于",
-            "205_nav_ui 原型（第十七步）\n\n"
+            "205_nav_ui 原型（第十八步）\n\n"
             "当前功能：\n"
             "- UAV/UGV 不同图形显示\n"
             "- 平台状态统一dataclass（含在线与真值预留字段）\n"
@@ -561,6 +579,7 @@ class MainWindow(QMainWindow):
             "- 支持0.5x/1.0x/2.0x回放倍速\n"
             "- 支持全局视图/定位选中/复位视图\n"
             "- 支持链路掉帧仿真（告警联调）\n"
+            "- 支持一键导出当前态势图截图\n"
             "- 平台编号显示/隐藏\n"
             "- 跟随选中目标\n"
             "- 跟随时禁用手动拖拽\n"

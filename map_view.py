@@ -411,6 +411,10 @@ class MapView(QGraphicsView):
             if truth_track_item is not None:
                 truth_track_item.setPath(QPainterPath())
 
+    def export_snapshot(self, file_path: str) -> bool:
+        snapshot = self.viewport().grab()
+        return snapshot.save(file_path, "PNG")
+
     def get_selected_platform_info(self) -> PlatformState | None:
         if self.selected_platform_id is None:
             return None

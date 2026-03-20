@@ -5,5 +5,7 @@ __pycache__/
 .venv/
 venv/
 
+exports
+
 .vscode/
 .DS_Store
