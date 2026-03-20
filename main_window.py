@@ -177,6 +177,12 @@ class MainWindow(QMainWindow):
         self.platform_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.platform_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         self.platform_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.platform_table.horizontalHeader().setSortIndicatorShown(True)
+        self.platform_table.horizontalHeader().setSortIndicator(0, Qt.SortOrder.AscendingOrder)
+        self.platform_table.horizontalHeader().sortIndicatorChanged.connect(
+            self.on_platform_table_sort_changed
+        )
+        self.platform_table.setSortingEnabled(True)
         self.platform_table.itemSelectionChanged.connect(self.on_table_selection_changed)
         list_layout.addWidget(self.platform_table)
 
@@ -213,6 +219,11 @@ class MainWindow(QMainWindow):
         self.truth_track_checkbox.setChecked(True)
         self.truth_track_checkbox.toggled.connect(self.map_view.set_show_truth_tracks)
         display_layout.addWidget(self.truth_track_checkbox)
+
+        self.velocity_vector_checkbox = QCheckBox("显示速度矢量")
+        self.velocity_vector_checkbox.setChecked(False)
+        self.velocity_vector_checkbox.toggled.connect(self.map_view.set_show_velocity_vectors)
+        display_layout.addWidget(self.velocity_vector_checkbox)
 
         track_duration_row = QHBoxLayout()
         track_duration_row.addWidget(QLabel("轨迹时间窗(s)"))
@@ -308,6 +319,8 @@ class MainWindow(QMainWindow):
         help_layout.addWidget(QLabel("33. 双击告警可快速定位到对应平台"))
         help_layout.addWidget(QLabel("34. 平台列表支持类型/状态/关键字筛选"))
         help_layout.addWidget(QLabel("35. 双击告警统计来源可快速筛选告警"))
+        help_layout.addWidget(QLabel("36. 平台列表支持点击表头排序"))
+        help_layout.addWidget(QLabel("37. 可开启速度矢量显示方向与速度大小"))
 
         export_index_group = QGroupBox("导出索引")
         export_index_layout = QVBoxLayout(export_index_group)
@@ -1743,6 +1756,13 @@ class MainWindow(QMainWindow):
         return max(10, int(self.base_timer_interval_ms / speed))
 
     def update_platform_table(self, platform_list: list[PlatformState]) -> None:
+        sort_column = self.platform_table.horizontalHeader().sortIndicatorSection()
+        sort_order = self.platform_table.horizontalHeader().sortIndicatorOrder()
+        sorting_enabled = self.platform_table.isSortingEnabled()
+        if sorting_enabled:
+            self.platform_table.setSortingEnabled(False)
+
+        self._rebuild_platform_row_mapping()
         incoming_ids = {str(platform_info.id) for platform_info in platform_list}
         removed_ids = [pid for pid in self.platform_row_by_id if pid not in incoming_ids]
         if removed_ids:
@@ -1774,6 +1794,11 @@ class MainWindow(QMainWindow):
             self._set_table_text(row, 4, "超时" if is_stale else "正常")
             self._set_row_style(row, is_stale)
 
+        self._rebuild_platform_row_mapping()
+        if sorting_enabled:
+            self.platform_table.setSortingEnabled(True)
+            self.platform_table.sortByColumn(sort_column, sort_order)
+            self._rebuild_platform_row_mapping()
         self.apply_platform_table_filters()
 
     def apply_platform_table_filters(self, _signal_value: object | None = None) -> None:
@@ -1841,6 +1866,10 @@ class MainWindow(QMainWindow):
         self.apply_platform_table_filters()
         self.status_bar.showMessage("平台列表筛选已重置")
 
+    def on_platform_table_sort_changed(self, _col: int, _order: Qt.SortOrder) -> None:
+        self._rebuild_platform_row_mapping()
+        self.apply_platform_table_filters()
+
     def _set_table_text(self, row: int, col: int, text: str) -> None:
         item = self.platform_table.item(row, col)
         if item is None:
@@ -1896,7 +1925,7 @@ class MainWindow(QMainWindow):
 
     def sync_table_selection(self, platform_id: str) -> None:
         row = self.platform_row_by_id.get(platform_id)
-        if row is None:
+        if row is None or self.platform_table.isRowHidden(row):
             return
         self._syncing_table_selection = True
         blocker = QSignalBlocker(self.platform_table)
@@ -1910,7 +1939,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "关于",
-            "205_nav_ui 原型（第三十一步）\n\n"
+            "205_nav_ui 原型（第三十二步）\n\n"
             "当前功能：\n"
             "- UAV/UGV 不同图形显示\n"
             "- 平台状态统一dataclass（含在线与真值预留字段）\n"
@@ -1931,8 +1960,10 @@ class MainWindow(QMainWindow):
             "- 双击告警可快速定位对应平台\n"
             "- 双击告警统计来源可快速筛选告警\n"
             "- 平台列表支持类型/状态/关键字筛选\n"
+            "- 平台列表支持点击表头排序\n"
             "- 平台列表统计概览（可见/总数/UAV/UGV/正常/超时）\n"
             "- 轨迹时间窗可在线调节\n"
+            "- 速度矢量显示开关\n"
             "- 回放时间轴拖动定位\n"
             "- 平台列表联动选中与定位\n"
             "- 数据新鲜度告警（超时灰显）\n"

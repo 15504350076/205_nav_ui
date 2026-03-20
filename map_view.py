@@ -29,6 +29,7 @@ class MapView(QGraphicsView):
         self.track_items: dict[str, QGraphicsPathItem] = {}
         self.track_history: dict[str, list[QPointF]] = {}
         self.track_time_history: dict[str, list[float]] = {}
+        self.velocity_vector_items: dict[str, QGraphicsPathItem] = {}
         self.truth_items: dict[str, QGraphicsEllipseItem] = {}
         self.truth_track_items: dict[str, QGraphicsPathItem] = {}
         self.truth_track_history: dict[str, list[QPointF]] = {}
@@ -40,10 +41,14 @@ class MapView(QGraphicsView):
         self.show_labels = True
         self.show_truth_points = True
         self.show_truth_tracks = True
+        self.show_velocity_vectors = False
         self.follow_selected = False
         self.lock_pan_when_follow = True
         self.track_duration_sec = 12.0
         self.max_track_points = 2000
+        self.velocity_vector_scale = 1.8
+        self.velocity_vector_min_length = 12.0
+        self.velocity_vector_max_length = 65.0
 
         self.scene = QGraphicsScene(self)
         self.scene.setSceneRect(-400, -300, 800, 600)
@@ -116,6 +121,24 @@ class MapView(QGraphicsView):
         truth_track_text.setPos(legend_x + 22, legend_y + 90)
         self.scene.addItem(truth_track_text)
 
+        velocity_line = QGraphicsPathItem()
+        velocity_path = QPainterPath()
+        velocity_path.moveTo(0, 0)
+        velocity_path.lineTo(16, 0)
+        velocity_path.moveTo(16, 0)
+        velocity_path.lineTo(11, -3)
+        velocity_path.moveTo(16, 0)
+        velocity_path.lineTo(11, 3)
+        velocity_line.setPath(velocity_path)
+        velocity_line.setPen(QPen(QColor(80, 200, 255), 1.5))
+        velocity_line.setPos(legend_x, legend_y + 118)
+        self.scene.addItem(velocity_line)
+
+        velocity_text = QGraphicsSimpleTextItem("Velocity")
+        velocity_text.setBrush(QBrush(QColor(230, 230, 230)))
+        velocity_text.setPos(legend_x + 22, legend_y + 110)
+        self.scene.addItem(velocity_text)
+
     def drawBackground(self, painter: QPainter, rect) -> None:
         super().drawBackground(painter, rect)
 
@@ -169,6 +192,13 @@ class MapView(QGraphicsView):
         self._trim_estimated_track(platform_info.id)
         self._refresh_estimated_track_path(platform_info.id)
 
+        velocity_vector_item = QGraphicsPathItem()
+        velocity_vector_item.setPen(QPen(item.get_track_color(), 1.5))
+        velocity_vector_item.setZValue(-0.8)
+        self.scene.addItem(velocity_vector_item)
+        self.velocity_vector_items[platform_info.id] = velocity_vector_item
+        self._update_velocity_vector(platform_info.id, platform_info)
+
         truth_item = QGraphicsEllipseItem(-5, -5, 10, 10)
         truth_item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
         truth_item.setPen(QPen(QColor(180, 255, 120), 1.5, Qt.PenStyle.DashLine))
@@ -221,6 +251,7 @@ class MapView(QGraphicsView):
             platform_info.y,
             platform_info.timestamp,
         )
+        self._update_velocity_vector(platform_id, platform_info)
         self._update_truth_marker(platform_id, platform_info)
         self._update_truth_track(platform_id, platform_info)
 
@@ -346,6 +377,10 @@ class MapView(QGraphicsView):
         self.show_truth_tracks = show
         self._refresh_all_truth_track_paths()
 
+    def set_show_velocity_vectors(self, show: bool) -> None:
+        self.show_velocity_vectors = show
+        self._refresh_all_velocity_vectors()
+
     def set_track_duration(self, duration_sec: float) -> None:
         self.track_duration_sec = max(0.5, duration_sec)
         for platform_id in self.track_history:
@@ -369,6 +404,7 @@ class MapView(QGraphicsView):
         self.stale_platform_ids = set(stale_platform_ids)
         for platform_id, item in self.platform_items.items():
             item.set_stale(platform_id in self.stale_platform_ids)
+        self._refresh_all_velocity_vectors()
 
     def remove_platforms(self, platform_ids: list[str]) -> None:
         for platform_id in platform_ids:
@@ -494,6 +530,10 @@ class MapView(QGraphicsView):
         track_item = self.track_items.pop(platform_id, None)
         if track_item is not None:
             self.scene.removeItem(track_item)
+
+        velocity_item = self.velocity_vector_items.pop(platform_id, None)
+        if velocity_item is not None:
+            self.scene.removeItem(velocity_item)
 
         truth_track_item = self.truth_track_items.pop(platform_id, None)
         if truth_track_item is not None:
@@ -630,6 +670,54 @@ class MapView(QGraphicsView):
             path.lineTo(point)
         track_item.setPath(path)
 
+    def _update_velocity_vector(self, platform_id: str, platform_info: PlatformState) -> None:
+        vector_item = self.velocity_vector_items.get(platform_id)
+        if vector_item is None:
+            return
+
+        if not self.show_velocity_vectors:
+            vector_item.setPath(QPainterPath())
+            return
+
+        planar_speed = math.hypot(platform_info.vx, platform_info.vy)
+        if planar_speed < 1e-6:
+            vector_item.setPath(QPainterPath())
+            return
+
+        direction_x = platform_info.vx / planar_speed
+        direction_y = platform_info.vy / planar_speed
+        vector_length = planar_speed * self.velocity_vector_scale
+        vector_length = max(
+            self.velocity_vector_min_length,
+            min(self.velocity_vector_max_length, vector_length),
+        )
+
+        start_x = platform_info.x
+        start_y = platform_info.y
+        end_x = start_x + direction_x * vector_length
+        end_y = start_y + direction_y * vector_length
+
+        head_length = max(5.0, min(10.0, vector_length * 0.26))
+        head_half_width = head_length * 0.55
+        left_x = end_x - direction_x * head_length - direction_y * head_half_width
+        left_y = end_y - direction_y * head_length + direction_x * head_half_width
+        right_x = end_x - direction_x * head_length + direction_y * head_half_width
+        right_y = end_y - direction_y * head_length - direction_x * head_half_width
+
+        path = QPainterPath()
+        path.moveTo(start_x, start_y)
+        path.lineTo(end_x, end_y)
+        path.moveTo(end_x, end_y)
+        path.lineTo(left_x, left_y)
+        path.moveTo(end_x, end_y)
+        path.lineTo(right_x, right_y)
+        vector_item.setPath(path)
+
+        base_color = self.platform_items[platform_id].get_track_color()
+        if platform_id in self.stale_platform_ids:
+            base_color = QColor(140, 140, 140)
+        vector_item.setPen(QPen(base_color, 1.5))
+
     def _refresh_all_estimated_track_paths(self) -> None:
         for platform_id in self.track_items:
             self._refresh_estimated_track_path(platform_id)
@@ -637,3 +725,7 @@ class MapView(QGraphicsView):
     def _refresh_all_truth_track_paths(self) -> None:
         for platform_id in self.truth_track_items:
             self._refresh_truth_track_path(platform_id)
+
+    def _refresh_all_velocity_vectors(self) -> None:
+        for platform_id, state in self.latest_platform_info.items():
+            self._update_velocity_vector(platform_id, state)
