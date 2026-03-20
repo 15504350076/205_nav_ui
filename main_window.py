@@ -40,6 +40,12 @@ from data_source import PlatformDataSource
 from error_plot_widget import ErrorPlotWidget
 from models import PlatformState
 from platform_manager import PlatformManager
+from alert_rules import (
+    AlertThresholdConfig,
+    AlertThresholdPreset,
+    get_default_alert_threshold_presets,
+    resolve_error_threshold,
+)
 from ui_state import UiState, load_ui_state, save_ui_state
 
 
@@ -99,6 +105,9 @@ class MainWindow(QMainWindow):
         self.last_stale_platform_ids: set[str] = set()
         self.last_error_alert_timestamp_by_id: dict[str, float] = {}
         self.alert_id_threshold_overrides: dict[str, float] = {}
+        self.alert_threshold_presets: list[AlertThresholdPreset] = (
+            get_default_alert_threshold_presets()
+        )
         self.base_timer_interval_ms = 100
         self.playback_speed = 1.0
         self._is_loading_ui_state = False
@@ -350,6 +359,7 @@ class MainWindow(QMainWindow):
         help_layout.addWidget(QLabel("38. 平台筛选条件可在重启后自动恢复"))
         help_layout.addWidget(QLabel("39. 告警误差阈值支持按UAV/UGV类型分别配置"))
         help_layout.addWidget(QLabel("40. 告警误差阈值支持按平台ID覆盖"))
+        help_layout.addWidget(QLabel("41. 告警阈值支持预设方案一键切换"))
 
         export_index_group = QGroupBox("导出索引")
         export_index_layout = QVBoxLayout(export_index_group)
@@ -549,6 +559,7 @@ class MainWindow(QMainWindow):
         self.alert_error_threshold_spin.setRange(0.1, 50.0)
         self.alert_error_threshold_spin.setSingleStep(0.5)
         self.alert_error_threshold_spin.setValue(4.0)
+        self.alert_error_threshold_spin.valueChanged.connect(self.on_alert_threshold_value_changed)
         alert_threshold_row.addWidget(self.alert_error_threshold_spin)
         alert_layout.addLayout(alert_threshold_row)
 
@@ -565,6 +576,7 @@ class MainWindow(QMainWindow):
         self.alert_error_threshold_uav_spin.setSingleStep(0.5)
         self.alert_error_threshold_uav_spin.setValue(4.0)
         self.alert_error_threshold_uav_spin.setEnabled(False)
+        self.alert_error_threshold_uav_spin.valueChanged.connect(self.on_alert_threshold_value_changed)
         alert_type_threshold_row.addWidget(self.alert_error_threshold_uav_spin)
 
         alert_type_threshold_row.addWidget(QLabel("UGV"))
@@ -574,8 +586,28 @@ class MainWindow(QMainWindow):
         self.alert_error_threshold_ugv_spin.setSingleStep(0.5)
         self.alert_error_threshold_ugv_spin.setValue(4.0)
         self.alert_error_threshold_ugv_spin.setEnabled(False)
+        self.alert_error_threshold_ugv_spin.valueChanged.connect(self.on_alert_threshold_value_changed)
         alert_type_threshold_row.addWidget(self.alert_error_threshold_ugv_spin)
         alert_layout.addLayout(alert_type_threshold_row)
+
+        alert_preset_row = QHBoxLayout()
+        alert_preset_row.addWidget(QLabel("阈值预设"))
+        self.alert_threshold_preset_combo = QComboBox()
+        for preset in self.alert_threshold_presets:
+            self.alert_threshold_preset_combo.addItem(preset.label, preset.key)
+        self.alert_threshold_preset_combo.currentIndexChanged.connect(
+            self.on_alert_threshold_preset_changed
+        )
+        alert_preset_row.addWidget(self.alert_threshold_preset_combo)
+
+        apply_alert_preset_button = QPushButton("应用预设")
+        apply_alert_preset_button.clicked.connect(self.on_apply_alert_threshold_preset)
+        alert_preset_row.addWidget(apply_alert_preset_button)
+        alert_layout.addLayout(alert_preset_row)
+
+        self.alert_threshold_preset_desc_label = QLabel("")
+        self.alert_threshold_preset_desc_label.setWordWrap(True)
+        alert_layout.addWidget(self.alert_threshold_preset_desc_label)
 
         alert_id_threshold_row = QHBoxLayout()
         self.alert_use_id_threshold_checkbox = QCheckBox("按平台ID阈值覆盖")
@@ -731,6 +763,7 @@ class MainWindow(QMainWindow):
         alert_button_row.addWidget(refresh_alert_stats_button)
         alert_layout.addLayout(alert_button_row)
         self.refresh_alert_id_threshold_table()
+        self._refresh_alert_threshold_preset_description()
 
         self.right_tabs = QTabWidget()
         self.right_tabs.setDocumentMode(True)
@@ -917,8 +950,10 @@ class MainWindow(QMainWindow):
         self._save_ui_state()
 
     def on_alert_threshold_mode_toggled(self, enabled: bool) -> None:
-        self.alert_error_threshold_uav_spin.setEnabled(enabled)
-        self.alert_error_threshold_ugv_spin.setEnabled(enabled)
+        self._set_alert_type_threshold_controls_enabled(enabled)
+        if self._is_loading_ui_state:
+            return
+        self._mark_alert_preset_custom()
         if enabled:
             self.status_bar.showMessage("已启用按平台类型误差阈值")
         else:
@@ -926,6 +961,21 @@ class MainWindow(QMainWindow):
         self._save_ui_state()
 
     def on_alert_id_threshold_mode_toggled(self, enabled: bool) -> None:
+        self._set_alert_id_threshold_controls_enabled(enabled)
+        if self._is_loading_ui_state:
+            return
+        self._mark_alert_preset_custom()
+        if enabled:
+            self.status_bar.showMessage("已启用按平台ID阈值覆盖")
+        else:
+            self.status_bar.showMessage("已关闭按平台ID阈值覆盖")
+        self._save_ui_state()
+
+    def _set_alert_type_threshold_controls_enabled(self, enabled: bool) -> None:
+        self.alert_error_threshold_uav_spin.setEnabled(enabled)
+        self.alert_error_threshold_ugv_spin.setEnabled(enabled)
+
+    def _set_alert_id_threshold_controls_enabled(self, enabled: bool) -> None:
         self.alert_id_threshold_id_edit.setEnabled(enabled)
         self.alert_id_threshold_value_spin.setEnabled(enabled)
         self.set_alert_id_threshold_button.setEnabled(enabled)
@@ -933,10 +983,89 @@ class MainWindow(QMainWindow):
         self.apply_selected_platform_threshold_button.setEnabled(enabled)
         self.clear_alert_id_threshold_button.setEnabled(enabled)
         self.alert_id_threshold_table.setVisible(enabled)
-        if enabled:
-            self.status_bar.showMessage("已启用按平台ID阈值覆盖")
-        else:
-            self.status_bar.showMessage("已关闭按平台ID阈值覆盖")
+
+    def on_alert_threshold_preset_changed(self, _index: int) -> None:
+        self._refresh_alert_threshold_preset_description()
+        if self._is_loading_ui_state:
+            return
+        self._save_ui_state()
+
+    def _mark_alert_preset_custom(self) -> None:
+        if str(self.alert_threshold_preset_combo.currentData()) == "custom":
+            return
+        blocker = QSignalBlocker(self.alert_threshold_preset_combo)
+        try:
+            index = self.alert_threshold_preset_combo.findData("custom")
+            if index >= 0:
+                self.alert_threshold_preset_combo.setCurrentIndex(index)
+        finally:
+            del blocker
+        self._refresh_alert_threshold_preset_description()
+
+    def on_alert_threshold_value_changed(self, _value: float) -> None:
+        if self._is_loading_ui_state:
+            return
+        self._mark_alert_preset_custom()
+        self._save_ui_state()
+
+    def _alert_preset_by_key(self, key: str) -> AlertThresholdPreset | None:
+        for preset in self.alert_threshold_presets:
+            if preset.key == key:
+                return preset
+        return None
+
+    def _refresh_alert_threshold_preset_description(self) -> None:
+        preset_key = str(self.alert_threshold_preset_combo.currentData())
+        preset = self._alert_preset_by_key(preset_key)
+        if preset is None:
+            self.alert_threshold_preset_desc_label.setText("预设不可用")
+            return
+        self.alert_threshold_preset_desc_label.setText(f"说明: {preset.description}")
+
+    def _current_alert_threshold_config(self) -> AlertThresholdConfig:
+        return AlertThresholdConfig(
+            unified_threshold=self.alert_error_threshold_spin.value(),
+            use_type_threshold=self.alert_use_type_threshold_checkbox.isChecked(),
+            uav_threshold=self.alert_error_threshold_uav_spin.value(),
+            ugv_threshold=self.alert_error_threshold_ugv_spin.value(),
+            use_id_threshold=self.alert_use_id_threshold_checkbox.isChecked(),
+            id_overrides=dict(self.alert_id_threshold_overrides),
+        )
+
+    def _apply_alert_threshold_config(self, config: AlertThresholdConfig) -> None:
+        blockers = (
+            QSignalBlocker(self.alert_error_threshold_spin),
+            QSignalBlocker(self.alert_use_type_threshold_checkbox),
+            QSignalBlocker(self.alert_error_threshold_uav_spin),
+            QSignalBlocker(self.alert_error_threshold_ugv_spin),
+            QSignalBlocker(self.alert_use_id_threshold_checkbox),
+        )
+        try:
+            self.alert_error_threshold_spin.setValue(config.unified_threshold)
+            self.alert_use_type_threshold_checkbox.setChecked(config.use_type_threshold)
+            self.alert_error_threshold_uav_spin.setValue(config.uav_threshold)
+            self.alert_error_threshold_ugv_spin.setValue(config.ugv_threshold)
+            self.alert_use_id_threshold_checkbox.setChecked(config.use_id_threshold)
+        finally:
+            for blocker in blockers:
+                del blocker
+
+        self.alert_id_threshold_overrides = dict(config.id_overrides)
+        self.refresh_alert_id_threshold_table()
+        self._set_alert_type_threshold_controls_enabled(config.use_type_threshold)
+        self._set_alert_id_threshold_controls_enabled(config.use_id_threshold)
+
+    def on_apply_alert_threshold_preset(self) -> None:
+        preset_key = str(self.alert_threshold_preset_combo.currentData())
+        preset = self._alert_preset_by_key(preset_key)
+        if preset is None:
+            self.status_bar.showMessage("阈值预设不存在")
+            return
+        if preset.key == "custom":
+            self.status_bar.showMessage("当前为自定义预设，不覆盖现有配置")
+            return
+        self._apply_alert_threshold_config(preset.config)
+        self.status_bar.showMessage(f"已应用阈值预设: {preset.label}")
         self._save_ui_state()
 
     def _normalize_threshold_platform_id(self, platform_id: str) -> str:
@@ -968,6 +1097,7 @@ class MainWindow(QMainWindow):
         threshold = self.alert_id_threshold_value_spin.value()
         self.alert_id_threshold_overrides[platform_id] = threshold
         self.refresh_alert_id_threshold_table(select_platform_id=platform_id)
+        self._mark_alert_preset_custom()
         self.status_bar.showMessage(f"已设置平台阈值: {platform_id} -> {threshold:.1f} m")
         self._save_ui_state()
 
@@ -984,12 +1114,14 @@ class MainWindow(QMainWindow):
         if platform_id in self.alert_id_threshold_overrides:
             self.alert_id_threshold_overrides.pop(platform_id, None)
             self.refresh_alert_id_threshold_table()
+            self._mark_alert_preset_custom()
             self.status_bar.showMessage(f"已删除平台阈值: {platform_id}")
             self._save_ui_state()
 
     def on_clear_alert_id_thresholds(self) -> None:
         self.alert_id_threshold_overrides.clear()
         self.refresh_alert_id_threshold_table()
+        self._mark_alert_preset_custom()
         self.status_bar.showMessage("已清空全部平台ID阈值")
         self._save_ui_state()
 
@@ -1010,28 +1142,9 @@ class MainWindow(QMainWindow):
         finally:
             del blocker
 
-    def _error_threshold_for_platform_type(self, platform_type: str) -> float:
-        if not self.alert_use_type_threshold_checkbox.isChecked():
-            return self.alert_error_threshold_spin.value()
-        normalized_type = platform_type.upper()
-        if normalized_type == "UAV":
-            return self.alert_error_threshold_uav_spin.value()
-        if normalized_type == "UGV":
-            return self.alert_error_threshold_ugv_spin.value()
-        return self.alert_error_threshold_spin.value()
-
     def _error_threshold_for_platform(self, platform_id: str, platform_type: str) -> tuple[float, str]:
-        normalized_id = self._normalize_threshold_platform_id(platform_id)
-        if self.alert_use_id_threshold_checkbox.isChecked():
-            threshold = self.alert_id_threshold_overrides.get(normalized_id)
-            if threshold is not None:
-                return threshold, f"ID阈值({normalized_id})"
-
-        if self.alert_use_type_threshold_checkbox.isChecked():
-            threshold = self._error_threshold_for_platform_type(platform_type)
-            return threshold, f"类型阈值({platform_type.upper()})"
-
-        return self.alert_error_threshold_spin.value(), "统一阈值"
+        config = self._current_alert_threshold_config()
+        return resolve_error_threshold(platform_id, platform_type, config)
 
     def on_stale_timeout_changed(self, value: float) -> None:
         self.platform_manager.set_stale_timeout(value)
@@ -1799,6 +1912,7 @@ class MainWindow(QMainWindow):
                 QSignalBlocker(self.alert_level_filter_combo),
                 QSignalBlocker(self.alert_status_filter_combo),
                 QSignalBlocker(self.alert_keyword_edit),
+                QSignalBlocker(self.alert_threshold_preset_combo),
             ]
             try:
                 self._set_combo_to_saved_data(
@@ -1837,9 +1951,16 @@ class MainWindow(QMainWindow):
             self.alert_use_type_threshold_checkbox.setChecked(state.alert_use_type_threshold)
             self.alert_error_threshold_uav_spin.setValue(state.alert_error_threshold_uav)
             self.alert_error_threshold_ugv_spin.setValue(state.alert_error_threshold_ugv)
+            self._set_combo_to_saved_data(
+                self.alert_threshold_preset_combo,
+                state.alert_threshold_preset_key,
+            )
             self.alert_use_id_threshold_checkbox.setChecked(state.alert_use_id_threshold)
             self.alert_id_threshold_overrides = dict(state.alert_id_threshold_overrides)
             self.refresh_alert_id_threshold_table()
+            self._refresh_alert_threshold_preset_description()
+            self._set_alert_type_threshold_controls_enabled(state.alert_use_type_threshold)
+            self._set_alert_id_threshold_controls_enabled(state.alert_use_id_threshold)
 
             sort_column = state.platform_sort_column
             try:
@@ -1879,6 +2000,7 @@ class MainWindow(QMainWindow):
             alert_use_type_threshold=self.alert_use_type_threshold_checkbox.isChecked(),
             alert_error_threshold_uav=self.alert_error_threshold_uav_spin.value(),
             alert_error_threshold_ugv=self.alert_error_threshold_ugv_spin.value(),
+            alert_threshold_preset_key=str(self.alert_threshold_preset_combo.currentData()),
             alert_use_id_threshold=self.alert_use_id_threshold_checkbox.isChecked(),
             alert_id_threshold_overrides=dict(self.alert_id_threshold_overrides),
         )
@@ -2307,7 +2429,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "关于",
-            "205_nav_ui 原型（第三十五步）\n\n"
+            "205_nav_ui 原型（第三十六步）\n\n"
             "当前功能：\n"
             "- UAV/UGV 不同图形显示\n"
             "- 平台状态统一dataclass（含在线与真值预留字段）\n"
@@ -2336,6 +2458,7 @@ class MainWindow(QMainWindow):
             "- 速度矢量样式区分UAV/UGV\n"
             "- 误差告警阈值支持统一/按类型配置\n"
             "- 误差告警阈值支持按平台ID覆盖\n"
+            "- 告警阈值预设方案一键切换\n"
             "- 回放时间轴拖动定位\n"
             "- 平台列表联动选中与定位\n"
             "- 数据新鲜度告警（超时灰显）\n"

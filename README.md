@@ -47,6 +47,7 @@ PySide6 原型界面，用于无人机（UAV）与无人车（UGV）协同导航
 - 告警中心（超时/下线/误差超阈）
 - 告警误差阈值支持统一模式与按类型模式（UAV/UGV）
 - 告警误差阈值支持按平台ID覆盖（单平台精细阈值）
+- 告警阈值预设（均衡/敏感/稳健/地面精细）一键应用
 - 告警确认、清空已确认、清空全部
 - 告警筛选（级别/状态/关键字）
 - 告警CSV导出
@@ -80,6 +81,8 @@ PySide6 原型界面，用于无人机（UAV）与无人车（UGV）协同导航
   - `PlatformDataSource` 协议（可替换数据源接口）
 - `platform_manager.py`
   - 集中管理平台状态、超时告警、超时移除、选中状态
+- `alert_rules.py`
+  - 告警阈值规则解析与预设定义（统一/类型/ID覆盖优先级）
 - `ui_state.py`
   - 统一管理 UI 筛选/排序/显示开关/阈值配置的序列化与持久化
 - `map_view.py`
@@ -135,6 +138,7 @@ python3 -m pytest -q
 - `tests/test_platform_manager.py`
 - `tests/test_fake_data.py`
 - `tests/test_ui_state.py`
+- `tests/test_alert_rules.py`
 
 ## 6. 后续建议
 

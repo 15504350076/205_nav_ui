@@ -70,6 +70,7 @@ class UiState:
     alert_use_type_threshold: bool = False
     alert_error_threshold_uav: float = 4.0
     alert_error_threshold_ugv: float = 4.0
+    alert_threshold_preset_key: str = "custom"
     alert_use_id_threshold: bool = False
     alert_id_threshold_overrides: dict[str, float] = field(default_factory=dict)
 
@@ -122,6 +123,10 @@ class UiState:
             data.get("alert_error_threshold_ugv"),
             state.alert_error_threshold_ugv,
         )
+        state.alert_threshold_preset_key = _as_str(
+            data.get("alert_threshold_preset_key"),
+            state.alert_threshold_preset_key,
+        )
         state.alert_use_id_threshold = _as_bool(
             data.get("alert_use_id_threshold"),
             state.alert_use_id_threshold,
@@ -162,6 +167,7 @@ class UiState:
             "alert_use_type_threshold": self.alert_use_type_threshold,
             "alert_error_threshold_uav": self.alert_error_threshold_uav,
             "alert_error_threshold_ugv": self.alert_error_threshold_ugv,
+            "alert_threshold_preset_key": self.alert_threshold_preset_key,
             "alert_use_id_threshold": self.alert_use_id_threshold,
             "alert_id_threshold_overrides": dict(self.alert_id_threshold_overrides),
         }
