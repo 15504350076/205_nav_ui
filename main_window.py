@@ -1,7 +1,7 @@
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QSignalBlocker, QTimer
+from PySide6.QtCore import QSignalBlocker, QTimer, Qt
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSplitter,
     QStatusBar,
     QTableWidget,
     QTableWidgetItem,
@@ -82,11 +83,11 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
 
         main_layout = QHBoxLayout(central_widget)
-        main_layout.addWidget(self.map_view, 4)
 
         right_scroll = QScrollArea()
         right_scroll.setWidgetResizable(True)
         right_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        right_scroll.setMinimumWidth(300)
 
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
@@ -224,6 +225,8 @@ class MainWindow(QMainWindow):
         help_layout.addWidget(QLabel("15. 支持真值点/真值轨迹与误差统计"))
         help_layout.addWidget(QLabel("16. 可一键导出当前态势图截图"))
         help_layout.addWidget(QLabel("17. 选中平台可查看平面误差曲线"))
+        help_layout.addWidget(QLabel("18. 可导出选中平台误差CSV与曲线PNG"))
+        help_layout.addWidget(QLabel("19. 左右分栏支持鼠标拖拽调宽"))
 
         button_group = QGroupBox("控制")
         button_layout = QVBoxLayout(button_group)
@@ -269,6 +272,14 @@ class MainWindow(QMainWindow):
         export_button.clicked.connect(self.on_export_snapshot)
         button_layout.addWidget(export_button)
 
+        export_error_csv_button = QPushButton("导出误差CSV")
+        export_error_csv_button.clicked.connect(self.on_export_error_csv)
+        button_layout.addWidget(export_error_csv_button)
+
+        export_error_plot_button = QPushButton("导出误差曲线PNG")
+        export_error_plot_button.clicked.connect(self.on_export_error_plot)
+        button_layout.addWidget(export_error_plot_button)
+
         right_layout.addWidget(info_group)
         right_layout.addWidget(error_group)
         right_layout.addWidget(list_group)
@@ -280,7 +291,14 @@ class MainWindow(QMainWindow):
         right_layout.addStretch()
 
         right_scroll.setWidget(right_panel)
-        main_layout.addWidget(right_scroll, 1)
+        self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.main_splitter.setHandleWidth(8)
+        self.main_splitter.addWidget(self.map_view)
+        self.main_splitter.addWidget(right_scroll)
+        self.main_splitter.setStretchFactor(0, 4)
+        self.main_splitter.setStretchFactor(1, 1)
+        self.main_splitter.setSizes([900, 300])
+        main_layout.addWidget(self.main_splitter)
 
     def _load_initial_data(self) -> None:
         initial_data = self.data_source.get_initial_data()
@@ -469,6 +487,54 @@ class MainWindow(QMainWindow):
         else:
             self.status_bar.showMessage("截图导出失败")
 
+    def on_export_error_csv(self) -> None:
+        selected_info = self.map_view.get_selected_platform_info()
+        if selected_info is None:
+            self.status_bar.showMessage("未选中平台，无法导出误差CSV")
+            return
+
+        platform_id = str(selected_info.id)
+        series = self.map_view.get_platform_error_series(platform_id)
+        if not series:
+            self.status_bar.showMessage("当前平台暂无误差数据")
+            return
+
+        export_dir = Path.cwd() / "exports" / "errors"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        file_path = export_dir / f"{platform_id}_planar_error_{timestamp}.csv"
+        try:
+            with file_path.open("w", encoding="utf-8") as file:
+                file.write("index,planar_error\n")
+                for index, value in enumerate(series):
+                    file.write(f"{index},{value:.6f}\n")
+        except OSError:
+            self.status_bar.showMessage("误差CSV导出失败")
+            return
+
+        self.status_bar.showMessage(f"误差CSV已导出: {file_path}")
+
+    def on_export_error_plot(self) -> None:
+        selected_info = self.map_view.get_selected_platform_info()
+        if selected_info is None:
+            self.status_bar.showMessage("未选中平台，无法导出误差曲线图")
+            return
+
+        platform_id = str(selected_info.id)
+        series = self.map_view.get_platform_error_series(platform_id)
+        if len(series) < 2:
+            self.status_bar.showMessage("误差数据不足，无法导出曲线图")
+            return
+
+        export_dir = Path.cwd() / "exports" / "errors"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        file_path = export_dir / f"{platform_id}_planar_error_{timestamp}.png"
+        if self.error_plot_widget.grab().save(str(file_path), "PNG"):
+            self.status_bar.showMessage(f"误差曲线图已导出: {file_path}")
+        else:
+            self.status_bar.showMessage("误差曲线图导出失败")
+
     def _current_timer_interval_ms(self) -> int:
         speed = max(self.playback_speed, 0.1)
         return max(10, int(self.base_timer_interval_ms / speed))
@@ -574,7 +640,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "关于",
-            "205_nav_ui 原型（第十九步）\n\n"
+            "205_nav_ui 原型（第二十步）\n\n"
             "当前功能：\n"
             "- UAV/UGV 不同图形显示\n"
             "- 平台状态统一dataclass（含在线与真值预留字段）\n"
@@ -582,6 +648,7 @@ class MainWindow(QMainWindow):
             "- 数据源接口抽象，可替换接入\n"
             "- 真值点/真值轨迹显示与误差可视化（当前+RMS）\n"
             "- 选中平台误差曲线面板\n"
+            "- 误差CSV与误差曲线PNG导出\n"
             "- 平台列表联动选中与定位\n"
             "- 数据新鲜度告警（超时灰显）\n"
             "- 下线平台自动移除（图元/轨迹/列表）\n"
@@ -591,6 +658,7 @@ class MainWindow(QMainWindow):
             "- 支持全局视图/定位选中/复位视图\n"
             "- 支持链路掉帧仿真（告警联调）\n"
             "- 支持一键导出当前态势图截图\n"
+            "- 左右分栏支持拖拽调宽\n"
             "- 平台编号显示/隐藏\n"
             "- 跟随选中目标\n"
             "- 跟随时禁用手动拖拽\n"

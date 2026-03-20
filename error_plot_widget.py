@@ -26,8 +26,7 @@ class ErrorPlotWidget(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.fillRect(self.rect(), QColor(28, 28, 28))
 
-        margin = 12
-        chart_rect = self.rect().adjusted(margin, margin, -margin, -margin)
+        chart_rect = self.rect().adjusted(52, 18, -16, -36)
         if chart_rect.width() <= 1 or chart_rect.height() <= 1:
             return
 
@@ -36,10 +35,34 @@ class ErrorPlotWidget(QWidget):
         for i in range(1, 4):
             y = chart_rect.top() + chart_rect.height() * i / 4
             painter.drawLine(chart_rect.left(), y, chart_rect.right(), y)
+        for i in range(1, 4):
+            x = chart_rect.left() + chart_rect.width() * i / 4
+            painter.drawLine(x, chart_rect.top(), x, chart_rect.bottom())
 
         border_pen = QPen(QColor(120, 120, 120), 1.0)
         painter.setPen(border_pen)
         painter.drawRect(chart_rect)
+        painter.drawLine(chart_rect.left(), chart_rect.bottom(), chart_rect.right(), chart_rect.bottom())
+        painter.drawLine(chart_rect.left(), chart_rect.top(), chart_rect.left(), chart_rect.bottom())
+
+        label_pen = QPen(QColor(200, 200, 200), 1.0)
+        painter.setPen(label_pen)
+        painter.drawText(
+            4,
+            chart_rect.top() - 2,
+            44,
+            20,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            "误差(m)",
+        )
+        painter.drawText(
+            chart_rect.left(),
+            chart_rect.bottom() + 8,
+            chart_rect.width(),
+            20,
+            Qt.AlignmentFlag.AlignCenter,
+            "时间序列点",
+        )
 
         if len(self._series) < 2:
             painter.setPen(QPen(QColor(170, 170, 170), 1))

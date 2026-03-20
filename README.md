@@ -42,7 +42,9 @@ PySide6 原型界面，用于无人机（UAV）与无人车（UGV）协同导航
 - 暂停 / 恢复 / 单步刷新
 - 回放倍速：`0.5x / 1.0x / 2.0x`
 - 掉帧仿真（启用开关 + 丢包率）
+- 左右分栏支持鼠标拖拽调宽
 - 一键导出态势图截图（保存到 `exports/` 目录）
+- 误差数据导出（CSV）与误差曲线导出（PNG）
 
 ## 3. 架构说明
 
@@ -106,10 +108,11 @@ python3 -m pytest -q
 当前测试文件：
 
 - `tests/test_platform_manager.py`
+- `tests/test_fake_data.py`
 
 ## 6. 后续建议
 
 - 增加 `PlatformDataSource` 的 ROS2 适配实现（保持 UI 层无感知）
 - 增加日志回放数据源（JSONL/CSV）
-- 增加误差曲线导出（CSV/PNG）
+- 增加导出文件索引面板（快速打开最近导出）
 - 扩展测试：`MapView` 交互与主窗口联动
