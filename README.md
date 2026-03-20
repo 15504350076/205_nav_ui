@@ -7,7 +7,7 @@ PySide6 原型界面，用于无人机（UAV）与无人车（UGV）协同导航
 ## 1. 项目定位
 
 - 平台：Ubuntu 22.04 + Python 3 + PySide6
-- 运行方式：`python3 app.py`
+- 运行方式：`python3 app.py`（支持 `--source` 切换数据源）
 - 当前数据源：`FakeDataGenerator`（可替换接口）
 - 未来方向：ROS2 Humble 在线接入、RTK 真值对比、离线回放
 
@@ -142,6 +142,19 @@ PySide6 原型界面，用于无人机（UAV）与无人车（UGV）协同导航
 ```bash
 cd /home/pdq/205_nav_ui
 python3 app.py
+```
+
+可选数据源启动方式：
+
+```bash
+# 默认假数据
+python3 app.py --source fake
+
+# ROS2 形态 mock 实时流
+python3 app.py --source mock_ros --mock-ros-ids UAV1,UAV2,UGV1 --mock-ros-interval 0.1
+
+# 从 JSONL 录制文件直接回放
+python3 app.py --source replay --replay-file exports/recordings/xxx.jsonl
 ```
 
 如果遇到 Qt `xcb` 插件相关错误（例如缺 `libxcb-cursor0`），可安装：
