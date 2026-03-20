@@ -100,10 +100,14 @@ PySide6 原型界面，用于无人机（UAV）与无人车（UGV）协同导航
   - 告警阈值规则解析、预设定义、版本化JSON配置读写与差异比较
 - `alert_history.py`
   - 告警历史记录模型、历史快照读写、JSONL导出与按时间清理
+- `alert_history_service.py`
+  - 告警历史快照服务（读写/导出/按保留天数清理）
 - `alert_center.py`
   - 告警筛选判定与分组统计聚合（与UI表格解耦的纯逻辑）
 - `alert_runtime.py`
   - 运行态告警规则引擎（超时/恢复/下线/误差升级）
+- `replay_data_source.py`
+  - 录制与回放数据源封装（实时源包装、JSONL读写、回放游标控制）
 - `ui_state.py`
   - 统一管理 UI 筛选/排序/显示开关/阈值配置的序列化与持久化
 - `map_view.py`
@@ -161,9 +165,18 @@ python3 -m pytest -q
 - `tests/test_ui_state.py`
 - `tests/test_alert_rules.py`
 - `tests/test_alert_history.py`
+- `tests/test_alert_history_service.py`
 - `tests/test_alert_center.py`
 - `tests/test_alert_runtime.py`
 - `tests/test_main_window_alerts.py`
+- `tests/test_main_window_integration.py`
+- `tests/test_replay_data_source.py`
+
+CI（GitHub Actions）：
+
+- `.github/workflows/ci.yml`
+  - 执行 `python -m py_compile *.py tests/*.py`
+  - 执行 `python -m pytest -q`
 
 ## 6. 后续建议
 

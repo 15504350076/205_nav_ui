@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
 from fake_data import FakeDataGenerator
 from map_view import MapView
 from data_source import PlatformDataSource
+from replay_data_source import ReplayDataSource
 from error_plot_widget import ErrorPlotWidget
 from models import PlatformState
 from platform_manager import PlatformManager
@@ -52,12 +53,9 @@ from alert_rules import (
 )
 from alert_history import (
     AlertRecord,
-    export_alert_history_jsonl,
-    load_alert_history,
-    prune_alert_history,
-    save_alert_history,
 )
 from alert_center import AlertRow, should_show_alert, summarize_alert_rows
+from alert_history_service import AlertHistoryService
 from alert_runtime import RuntimeAlertEngine
 from ui_state import UiState, load_ui_state, save_ui_state
 
@@ -91,7 +89,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("205_nav_ui - PySide6 原型")
         self.resize(1200, 700)
 
-        self.data_source = data_source if data_source is not None else FakeDataGenerator()
+        live_source = data_source if data_source is not None else FakeDataGenerator()
+        self.data_source = ReplayDataSource(live_source)
         self.platform_manager = PlatformManager(stale_timeout_sec=0.6, remove_timeout_sec=3.0)
 
         self.id_label = QLabel("--")
@@ -107,18 +106,13 @@ class MainWindow(QMainWindow):
         self.platform_row_by_id: dict[str, int] = {}
         self._syncing_table_selection = False
         self.pinned_export_paths: set[str] = set()
-        self.is_recording = False
-        self.recorded_frames: list[list[dict]] = []
-        self.is_replay_mode = False
-        self.replay_frames: list[list[PlatformState]] = []
-        self.replay_frame_index = 0
-        self.replay_file_path: Path | None = None
         self._syncing_replay_slider = False
         self.alert_max_rows = 400
         self.runtime_alert_engine = RuntimeAlertEngine()
         self.alert_id_threshold_overrides: dict[str, float] = {}
         self.last_alert_threshold_import_meta: AlertThresholdConfigFileMeta | None = None
         self._is_restoring_alert_history = False
+        self.alert_history_service = AlertHistoryService(Path.cwd() / "exports" / "alerts")
         self.alert_threshold_presets: list[AlertThresholdPreset] = (
             get_default_alert_threshold_presets()
         )
@@ -127,7 +121,7 @@ class MainWindow(QMainWindow):
         self._is_loading_ui_state = False
         self._ui_state_ready = False
         self.packet_loss_controls_supported = all(
-            hasattr(self.data_source, name)
+            hasattr(live_source, name)
             for name in ("set_packet_loss_enabled", "set_packet_loss_rate")
         )
 
@@ -1020,13 +1014,11 @@ class MainWindow(QMainWindow):
         self.map_view.fit_all_platforms()
 
     def on_timer_update(self) -> None:
-        if self.is_replay_mode:
+        if self.data_source.is_replay_mode:
             self._advance_replay_frame(status_prefix="回放")
             return
 
         platform_data = self.data_source.get_next_frame()
-        if self.is_recording:
-            self.recorded_frames.append([state.to_dict() for state in platform_data])
         self._apply_frame_update(platform_data)
 
     def _apply_frame_update(self, platform_data: list[PlatformState], status_prefix: str = "") -> None:
@@ -1115,12 +1107,10 @@ class MainWindow(QMainWindow):
         if self.timer.isActive():
             self.status_bar.showMessage("当前为自动刷新模式，请先暂停后再单步刷新")
             return
-        if self.is_replay_mode:
+        if self.data_source.is_replay_mode:
             self._advance_replay_frame(status_prefix="回放单步")
             return
         platform_data = self.data_source.get_next_frame()
-        if self.is_recording:
-            self.recorded_frames.append([state.to_dict() for state in platform_data])
         self._apply_frame_update(platform_data, status_prefix="单步刷新完成")
 
     def on_follow_toggled(self, enabled: bool) -> None:
@@ -1167,9 +1157,6 @@ class MainWindow(QMainWindow):
             return
         self._save_ui_state()
 
-    def _alert_history_store_path(self) -> Path:
-        return Path.cwd() / "exports" / "alerts" / ".alert_history.json"
-
     def _collect_alert_records(self, visible_only: bool = False) -> list[AlertRecord]:
         records: list[AlertRecord] = []
         for row in range(self.alert_table.rowCount()):
@@ -1193,7 +1180,7 @@ class MainWindow(QMainWindow):
         if self._is_restoring_alert_history:
             return
         records = self._collect_alert_records(visible_only=False)
-        save_alert_history(self._alert_history_store_path(), records)
+        self.alert_history_service.save_snapshot(records)
 
     def _restore_alert_history_records(
         self,
@@ -1223,7 +1210,7 @@ class MainWindow(QMainWindow):
     def _auto_restore_alert_history(self) -> None:
         if not self.alert_restore_history_checkbox.isChecked():
             return
-        records = load_alert_history(self._alert_history_store_path())
+        records = self.alert_history_service.load_snapshot()
         if not records:
             return
         self._restore_alert_history_records(records, clear_existing=False)
@@ -1232,15 +1219,15 @@ class MainWindow(QMainWindow):
 
     def on_save_alert_history_snapshot(self) -> None:
         records = self._collect_alert_records(visible_only=False)
-        if save_alert_history(self._alert_history_store_path(), records):
+        if self.alert_history_service.save_snapshot(records):
             self.status_bar.showMessage(
-                f"已保存告警历史: {len(records)} 条 -> {self._alert_history_store_path()}"
+                f"已保存告警历史: {len(records)} 条 -> {self.alert_history_service.store_path}"
             )
             return
         self.status_bar.showMessage("保存告警历史失败")
 
     def on_load_alert_history_snapshot(self) -> None:
-        records = load_alert_history(self._alert_history_store_path())
+        records = self.alert_history_service.load_snapshot()
         if not records:
             self.status_bar.showMessage("未找到可用告警历史")
             return
@@ -1252,22 +1239,19 @@ class MainWindow(QMainWindow):
         if not records:
             self.status_bar.showMessage("当前无告警历史可导出")
             return
-        export_dir = Path.cwd() / "exports" / "alerts"
-        export_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        file_path = export_dir / f"alert_history_{timestamp}.jsonl"
-        if not export_alert_history_jsonl(file_path, records):
+        file_path = self.alert_history_service.export_jsonl(records)
+        if file_path is None:
             self.status_bar.showMessage("告警历史JSONL导出失败")
             return
         self.refresh_export_index(focus_path=file_path)
         self.status_bar.showMessage(f"已导出告警历史JSONL: {file_path}")
 
     def on_prune_alert_history(self) -> None:
-        retention_days = self.alert_history_retention_days_spin.value()
-        max_age_sec = float(retention_days) * 24.0 * 60.0 * 60.0
         records = self._collect_alert_records(visible_only=False)
-        pruned = prune_alert_history(records, max_age_sec)
-        removed = len(records) - len(pruned)
+        pruned, removed = self.alert_history_service.prune_records(
+            records,
+            retention_days=self.alert_history_retention_days_spin.value(),
+        )
         if removed <= 0:
             self.status_bar.showMessage("无过期告警历史需要清理")
             return
@@ -1714,7 +1698,7 @@ class MainWindow(QMainWindow):
 
     def resume_updates(self) -> None:
         self.timer.start(self._current_timer_interval_ms())
-        if self.is_replay_mode:
+        if self.data_source.is_replay_mode:
             self.status_bar.showMessage("已恢复自动回放")
             return
         selected_info = self.map_view.get_selected_platform_info()
@@ -1785,11 +1769,12 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("误差曲线图导出失败")
 
     def on_start_recording(self) -> None:
-        if self.is_replay_mode:
+        if self.data_source.is_replay_mode:
             self.status_bar.showMessage("回放模式下不能开始录制")
             return
-        self.recorded_frames = []
-        self.is_recording = True
+        if not self.data_source.start_recording():
+            self.status_bar.showMessage("开始录制失败")
+            return
         self.replay_status_label.setText("模式: 实时录制中")
         self.replay_file_label.setText("文件: --")
         self.replay_frame_label.setText("帧: --/--")
@@ -1797,11 +1782,11 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("已开始录制实时数据")
 
     def on_stop_recording_and_save(self) -> None:
-        if not self.is_recording:
+        if not self.data_source.is_recording:
             self.status_bar.showMessage("当前未处于录制状态")
             return
-        self.is_recording = False
-        if not self.recorded_frames:
+        recorded_frames = self.data_source.stop_recording()
+        if not recorded_frames:
             self.replay_status_label.setText("模式: 实时")
             self.replay_frame_label.setText("帧: --/--")
             self.status_bar.showMessage("录制为空，未生成文件")
@@ -1811,20 +1796,15 @@ class MainWindow(QMainWindow):
         record_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         file_path = record_dir / f"replay_{timestamp}.jsonl"
-        try:
-            with file_path.open("w", encoding="utf-8") as file:
-                for frame in self.recorded_frames:
-                    file.write(json.dumps(frame, ensure_ascii=False))
-                    file.write("\n")
-        except OSError:
+        if not self.data_source.save_recording_jsonl(file_path):
             self.status_bar.showMessage("录制保存失败")
             return
 
         self.replay_status_label.setText("模式: 实时")
-        self.replay_frame_label.setText(f"帧: 0/{len(self.recorded_frames)}")
+        self.replay_frame_label.setText(f"帧: 0/{len(recorded_frames)}")
         self.refresh_export_index(focus_path=file_path)
         self.status_bar.showMessage(
-            f"录制完成并保存: {file_path} | 帧数: {len(self.recorded_frames)}"
+            f"录制完成并保存: {file_path} | 帧数: {len(recorded_frames)}"
         )
 
     def on_load_replay_file(self) -> None:
@@ -1839,52 +1819,31 @@ class MainWindow(QMainWindow):
         if not file_path_str:
             return
 
-        file_path = Path(file_path_str)
-        loaded_frames: list[list[PlatformState]] = []
-        try:
-            with file_path.open("r", encoding="utf-8") as file:
-                for line in file:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    raw_frame = json.loads(line)
-                    if not isinstance(raw_frame, list):
-                        continue
-                    frame_states: list[PlatformState] = []
-                    for item in raw_frame:
-                        state = self._state_from_dict(item)
-                        if state is not None:
-                            frame_states.append(state)
-                    loaded_frames.append(frame_states)
-        except (OSError, json.JSONDecodeError):
-            self.status_bar.showMessage("回放文件读取失败")
-            return
+        self.load_replay_from_path(Path(file_path_str))
 
-        if not loaded_frames:
+    def load_replay_from_path(self, file_path: Path) -> bool:
+        if not self.data_source.load_replay_jsonl(file_path):
             self.status_bar.showMessage("回放文件为空或格式无效")
-            return
+            return False
 
-        self.is_recording = False
-        self.is_replay_mode = True
-        self.replay_frames = loaded_frames
-        self.replay_frame_index = 0
-        self.replay_file_path = file_path
         self.replay_status_label.setText("模式: 回放")
         self.replay_file_label.setText(f"文件: {file_path.name}")
-        self._set_replay_slider_state(enabled=True, max_index=len(self.replay_frames) - 1, value=0)
-        self.replay_frame_label.setText(f"帧: 0/{len(self.replay_frames)}")
+        self._set_replay_slider_state(
+            enabled=True,
+            max_index=self.data_source.replay_total_frames - 1,
+            value=0,
+        )
+        self.replay_frame_label.setText(f"帧: 0/{self.data_source.replay_total_frames}")
         self._reset_platform_runtime()
         self._advance_replay_frame(status_prefix="回放加载")
         self.status_bar.showMessage(f"已加载回放文件: {file_path}")
+        return True
 
     def on_exit_replay_mode(self) -> None:
-        if not self.is_replay_mode:
+        if not self.data_source.is_replay_mode:
             self.status_bar.showMessage("当前不在回放模式")
             return
-        self.is_replay_mode = False
-        self.replay_frames = []
-        self.replay_frame_index = 0
-        self.replay_file_path = None
+        self.data_source.exit_replay_mode()
         self.replay_status_label.setText("模式: 实时")
         self.replay_file_label.setText("文件: --")
         self.replay_frame_label.setText("帧: --/--")
@@ -1894,17 +1853,16 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("已退出回放模式并恢复实时数据")
 
     def on_replay_prev_frame(self) -> None:
-        if not self.is_replay_mode:
+        if not self.data_source.is_replay_mode:
             self.status_bar.showMessage("当前不在回放模式")
             return
-        if self.replay_frame_index <= 1:
+        if not self.data_source.step_back_replay_cursor():
             self.status_bar.showMessage("已经是回放首帧")
             return
-        self.replay_frame_index -= 2
         self._advance_replay_frame(status_prefix="回放回退")
 
     def on_replay_next_frame(self) -> None:
-        if not self.is_replay_mode:
+        if not self.data_source.is_replay_mode:
             self.status_bar.showMessage("当前不在回放模式")
             return
         if self.timer.isActive():
@@ -1913,30 +1871,30 @@ class MainWindow(QMainWindow):
         self._advance_replay_frame(status_prefix="回放单步")
 
     def _advance_replay_frame(self, status_prefix: str = "回放") -> bool:
-        if not self.replay_frames:
+        if not self.data_source.is_replay_mode:
             return False
-        if self.replay_frame_index >= len(self.replay_frames):
+        total = self.data_source.replay_total_frames
+        current_index = self.data_source.replay_frame_index
+        if current_index >= total:
             if self.timer.isActive():
                 self.timer.stop()
             self.status_bar.showMessage("回放结束")
             return False
 
-        current_index = self.replay_frame_index
-        frame = self.replay_frames[current_index]
+        frame = self.data_source.get_next_frame()
         self._apply_frame_update(
             frame,
-            status_prefix=f"{status_prefix} {current_index + 1}/{len(self.replay_frames)}",
+            status_prefix=f"{status_prefix} {current_index + 1}/{total}",
         )
-        self.replay_frame_index += 1
         self._update_replay_progress(current_index)
         return True
 
     def on_replay_slider_changed(self, value: int) -> None:
-        if self._syncing_replay_slider or not self.is_replay_mode:
+        if self._syncing_replay_slider or not self.data_source.is_replay_mode:
             return
-        if value < 0 or value >= len(self.replay_frames):
+        if value < 0 or value >= self.data_source.replay_total_frames:
             return
-        self.replay_frame_index = value
+        self.data_source.replay_frame_index = value
         self._advance_replay_frame(status_prefix="回放定位")
 
     def _set_replay_slider_state(self, enabled: bool, max_index: int, value: int) -> None:
@@ -1950,45 +1908,10 @@ class MainWindow(QMainWindow):
             self._syncing_replay_slider = False
 
     def _update_replay_progress(self, current_index: int) -> None:
-        total = len(self.replay_frames)
+        total = self.data_source.replay_total_frames
         self.replay_status_label.setText("模式: 回放")
         self.replay_frame_label.setText(f"帧: {current_index + 1}/{total}")
         self._set_replay_slider_state(enabled=True, max_index=total - 1, value=current_index)
-
-    def _state_from_dict(self, raw_item: dict) -> PlatformState | None:
-        if not isinstance(raw_item, dict):
-            return None
-        try:
-            return PlatformState(
-                id=str(raw_item["id"]),
-                type=str(raw_item["type"]),
-                x=float(raw_item["x"]),
-                y=float(raw_item["y"]),
-                z=float(raw_item["z"]),
-                vx=float(raw_item.get("vx", 0.0)),
-                vy=float(raw_item.get("vy", 0.0)),
-                vz=float(raw_item.get("vz", 0.0)),
-                speed=float(raw_item.get("speed", 0.0)),
-                timestamp=float(raw_item.get("timestamp", 0.0)),
-                is_online=bool(raw_item.get("is_online", True)),
-                truth_x=(
-                    float(raw_item["truth_x"])
-                    if raw_item.get("truth_x") is not None
-                    else None
-                ),
-                truth_y=(
-                    float(raw_item["truth_y"])
-                    if raw_item.get("truth_y") is not None
-                    else None
-                ),
-                truth_z=(
-                    float(raw_item["truth_z"])
-                    if raw_item.get("truth_z") is not None
-                    else None
-                ),
-            )
-        except (KeyError, TypeError, ValueError):
-            return None
 
     def _reset_platform_runtime(self) -> None:
         existing_ids = [state.id for state in self.map_view.get_all_platform_infos()]
@@ -2373,7 +2296,7 @@ class MainWindow(QMainWindow):
             internal_store_paths = {
                 self._pinned_store_path().resolve(),
                 self._ui_state_store_path().resolve(),
-                self._alert_history_store_path().resolve(),
+                self.alert_history_service.store_path.resolve(),
             }
             for path in export_root.rglob("*"):
                 if not path.is_file():
