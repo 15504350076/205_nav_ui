@@ -1,3 +1,4 @@
+import csv
 import json
 import math
 from datetime import datetime
@@ -266,6 +267,8 @@ class MainWindow(QMainWindow):
         help_layout.addWidget(QLabel("27. 支持告警中心与告警确认/清理"))
         help_layout.addWidget(QLabel("28. 轨迹时间窗可在线调节"))
         help_layout.addWidget(QLabel("29. 回放支持时间轴拖动定位"))
+        help_layout.addWidget(QLabel("30. 告警中心支持级别/状态/关键字筛选"))
+        help_layout.addWidget(QLabel("31. 告警列表支持CSV导出"))
 
         export_index_group = QGroupBox("导出索引")
         export_index_layout = QVBoxLayout(export_index_group)
@@ -468,6 +471,34 @@ class MainWindow(QMainWindow):
         alert_threshold_row.addWidget(self.alert_error_threshold_spin)
         alert_layout.addLayout(alert_threshold_row)
 
+        alert_filter_row = QHBoxLayout()
+        alert_filter_row.addWidget(QLabel("级别"))
+        self.alert_level_filter_combo = QComboBox()
+        self.alert_level_filter_combo.addItem("全部", "all")
+        self.alert_level_filter_combo.addItem("INFO", "INFO")
+        self.alert_level_filter_combo.addItem("WARN", "WARN")
+        self.alert_level_filter_combo.addItem("ERROR", "ERROR")
+        self.alert_level_filter_combo.currentIndexChanged.connect(self.apply_alert_filters)
+        alert_filter_row.addWidget(self.alert_level_filter_combo)
+
+        alert_filter_row.addWidget(QLabel("状态"))
+        self.alert_status_filter_combo = QComboBox()
+        self.alert_status_filter_combo.addItem("全部", "all")
+        self.alert_status_filter_combo.addItem("未确认", "未确认")
+        self.alert_status_filter_combo.addItem("已确认", "已确认")
+        self.alert_status_filter_combo.currentIndexChanged.connect(self.apply_alert_filters)
+        alert_filter_row.addWidget(self.alert_status_filter_combo)
+        alert_layout.addLayout(alert_filter_row)
+
+        alert_search_row = QHBoxLayout()
+        alert_search_row.addWidget(QLabel("搜索"))
+        self.alert_keyword_edit = QLineEdit()
+        self.alert_keyword_edit.setPlaceholderText("按来源或内容筛选告警")
+        self.alert_keyword_edit.setClearButtonEnabled(True)
+        self.alert_keyword_edit.textChanged.connect(self.apply_alert_filters)
+        alert_search_row.addWidget(self.alert_keyword_edit)
+        alert_layout.addLayout(alert_search_row)
+
         self.alert_table = QTableWidget(0, 5)
         self.alert_table.setHorizontalHeaderLabels(["时间", "级别", "来源", "内容", "状态"])
         self.alert_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -494,6 +525,10 @@ class MainWindow(QMainWindow):
         clear_all_alert_button = QPushButton("清空全部")
         clear_all_alert_button.clicked.connect(self.on_clear_all_alerts)
         alert_button_row.addWidget(clear_all_alert_button)
+
+        export_alert_button = QPushButton("导出CSV")
+        export_alert_button.clicked.connect(self.on_export_alerts_csv)
+        alert_button_row.addWidget(export_alert_button)
         alert_layout.addLayout(alert_button_row)
 
         self.right_tabs = QTabWidget()
@@ -1097,6 +1132,27 @@ class MainWindow(QMainWindow):
 
         while self.alert_table.rowCount() > self.alert_max_rows:
             self.alert_table.removeRow(0)
+        self.apply_alert_filters()
+
+    def apply_alert_filters(self, _signal_value: object | None = None) -> None:
+        level_filter = self.alert_level_filter_combo.currentData()
+        status_filter = self.alert_status_filter_combo.currentData()
+        keyword = self.alert_keyword_edit.text().strip().lower()
+
+        for row in range(self.alert_table.rowCount()):
+            level_text = self.alert_table.item(row, 1).text() if self.alert_table.item(row, 1) else ""
+            source_text = self.alert_table.item(row, 2).text() if self.alert_table.item(row, 2) else ""
+            message_text = self.alert_table.item(row, 3).text() if self.alert_table.item(row, 3) else ""
+            status_text = self.alert_table.item(row, 4).text() if self.alert_table.item(row, 4) else ""
+
+            visible = True
+            if level_filter not in (None, "all") and level_text != str(level_filter):
+                visible = False
+            if status_filter not in (None, "all") and status_text != str(status_filter):
+                visible = False
+            if keyword and keyword not in source_text.lower() and keyword not in message_text.lower():
+                visible = False
+            self.alert_table.setRowHidden(row, not visible)
 
     def on_ack_selected_alerts(self) -> None:
         selected_rows = self.alert_table.selectionModel().selectedRows()
@@ -1107,6 +1163,7 @@ class MainWindow(QMainWindow):
             status_item = self.alert_table.item(model_index.row(), 4)
             if status_item is not None:
                 status_item.setText("已确认")
+        self.apply_alert_filters()
         self.status_bar.showMessage(f"已确认 {len(selected_rows)} 条告警")
 
     def on_clear_acknowledged_alerts(self) -> None:
@@ -1116,11 +1173,44 @@ class MainWindow(QMainWindow):
             if status_item is not None and status_item.text() == "已确认":
                 self.alert_table.removeRow(row)
                 removed += 1
+        self.apply_alert_filters()
         self.status_bar.showMessage(f"已清空 {removed} 条已确认告警")
 
     def on_clear_all_alerts(self) -> None:
         self.alert_table.setRowCount(0)
         self.status_bar.showMessage("已清空全部告警")
+
+    def on_export_alerts_csv(self) -> None:
+        export_dir = Path.cwd() / "exports" / "alerts"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        file_path = export_dir / f"alerts_{timestamp}.csv"
+
+        rows: list[list[str]] = []
+        for row in range(self.alert_table.rowCount()):
+            if self.alert_table.isRowHidden(row):
+                continue
+            row_data: list[str] = []
+            for col in range(self.alert_table.columnCount()):
+                item = self.alert_table.item(row, col)
+                row_data.append(item.text() if item is not None else "")
+            rows.append(row_data)
+
+        if not rows:
+            self.status_bar.showMessage("当前筛选结果为空，未导出告警CSV")
+            return
+
+        try:
+            with file_path.open("w", encoding="utf-8", newline="") as file:
+                writer = csv.writer(file)
+                writer.writerow(["time", "level", "source", "message", "status"])
+                writer.writerows(rows)
+        except OSError:
+            self.status_bar.showMessage("告警CSV导出失败")
+            return
+
+        self.refresh_export_index(focus_path=file_path)
+        self.status_bar.showMessage(f"已导出告警CSV: {file_path}")
 
     def refresh_export_index(
         self,
@@ -1476,9 +1566,9 @@ class MainWindow(QMainWindow):
 
     def _set_row_style(self, row: int, is_stale: bool) -> None:
         if is_stale:
-            foreground = QBrush(QColor(255, 120, 120))
+            foreground = QBrush(QColor(170, 40, 40))
         else:
-            foreground = QBrush(QColor(230, 230, 230))
+            foreground = QBrush(QColor(35, 35, 35))
         for col in range(self.platform_table.columnCount()):
             item = self.platform_table.item(row, col)
             if item is not None:
@@ -1536,7 +1626,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "关于",
-            "205_nav_ui 原型（第二十八步）\n\n"
+            "205_nav_ui 原型（第二十九步）\n\n"
             "当前功能：\n"
             "- UAV/UGV 不同图形显示\n"
             "- 平台状态统一dataclass（含在线与真值预留字段）\n"
@@ -1551,6 +1641,8 @@ class MainWindow(QMainWindow):
             "- 实时数据录制与文件回放\n"
             "- 告警中心（超时/下线/误差超阈）\n"
             "- 告警确认与清理\n"
+            "- 告警筛选（级别/状态/关键字）\n"
+            "- 告警CSV导出\n"
             "- 轨迹时间窗可在线调节\n"
             "- 回放时间轴拖动定位\n"
             "- 平台列表联动选中与定位\n"
