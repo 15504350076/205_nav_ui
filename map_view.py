@@ -121,7 +121,7 @@ class MapView(QGraphicsView):
         truth_track_text.setPos(legend_x + 22, legend_y + 90)
         self.scene.addItem(truth_track_text)
 
-        velocity_line = QGraphicsPathItem()
+        velocity_uav_line = QGraphicsPathItem()
         velocity_path = QPainterPath()
         velocity_path.moveTo(0, 0)
         velocity_path.lineTo(16, 0)
@@ -129,15 +129,33 @@ class MapView(QGraphicsView):
         velocity_path.lineTo(11, -3)
         velocity_path.moveTo(16, 0)
         velocity_path.lineTo(11, 3)
-        velocity_line.setPath(velocity_path)
-        velocity_line.setPen(QPen(QColor(80, 200, 255), 1.5))
-        velocity_line.setPos(legend_x, legend_y + 118)
-        self.scene.addItem(velocity_line)
+        velocity_uav_line.setPath(velocity_path)
+        velocity_uav_line.setPen(QPen(QColor(80, 200, 255), 1.6, Qt.PenStyle.SolidLine))
+        velocity_uav_line.setPos(legend_x, legend_y + 118)
+        self.scene.addItem(velocity_uav_line)
 
-        velocity_text = QGraphicsSimpleTextItem("Velocity")
-        velocity_text.setBrush(QBrush(QColor(230, 230, 230)))
-        velocity_text.setPos(legend_x + 22, legend_y + 110)
-        self.scene.addItem(velocity_text)
+        velocity_uav_text = QGraphicsSimpleTextItem("Velocity UAV")
+        velocity_uav_text.setBrush(QBrush(QColor(230, 230, 230)))
+        velocity_uav_text.setPos(legend_x + 22, legend_y + 110)
+        self.scene.addItem(velocity_uav_text)
+
+        velocity_ugv_line = QGraphicsPathItem()
+        velocity_ugv_path = QPainterPath()
+        velocity_ugv_path.moveTo(0, 0)
+        velocity_ugv_path.lineTo(16, 0)
+        velocity_ugv_path.moveTo(16, 0)
+        velocity_ugv_path.lineTo(11, -3)
+        velocity_ugv_path.moveTo(16, 0)
+        velocity_ugv_path.lineTo(11, 3)
+        velocity_ugv_line.setPath(velocity_ugv_path)
+        velocity_ugv_line.setPen(QPen(QColor(255, 170, 60), 1.6, Qt.PenStyle.DashLine))
+        velocity_ugv_line.setPos(legend_x, legend_y + 138)
+        self.scene.addItem(velocity_ugv_line)
+
+        velocity_ugv_text = QGraphicsSimpleTextItem("Velocity UGV")
+        velocity_ugv_text.setBrush(QBrush(QColor(230, 230, 230)))
+        velocity_ugv_text.setPos(legend_x + 22, legend_y + 130)
+        self.scene.addItem(velocity_ugv_text)
 
     def drawBackground(self, painter: QPainter, rect) -> None:
         super().drawBackground(painter, rect)
@@ -193,7 +211,7 @@ class MapView(QGraphicsView):
         self._refresh_estimated_track_path(platform_info.id)
 
         velocity_vector_item = QGraphicsPathItem()
-        velocity_vector_item.setPen(QPen(item.get_track_color(), 1.5))
+        velocity_vector_item.setPen(self._velocity_pen_for_platform(platform_info.id, platform_info))
         velocity_vector_item.setZValue(-0.8)
         self.scene.addItem(velocity_vector_item)
         self.velocity_vector_items[platform_info.id] = velocity_vector_item
@@ -713,10 +731,25 @@ class MapView(QGraphicsView):
         path.lineTo(right_x, right_y)
         vector_item.setPath(path)
 
-        base_color = self.platform_items[platform_id].get_track_color()
+        vector_item.setPen(self._velocity_pen_for_platform(platform_id, platform_info))
+
+    def _velocity_pen_for_platform(
+        self,
+        platform_id: str,
+        platform_info: PlatformState,
+    ) -> QPen:
         if platform_id in self.stale_platform_ids:
-            base_color = QColor(140, 140, 140)
-        vector_item.setPen(QPen(base_color, 1.5))
+            return QPen(QColor(140, 140, 140), 1.5, Qt.PenStyle.DotLine)
+
+        platform_item = self.platform_items.get(platform_id)
+        if platform_item is None:
+            return QPen(QColor(220, 220, 220), 1.5, Qt.PenStyle.SolidLine)
+
+        base_color = platform_item.get_track_color()
+        platform_type = platform_info.type.upper()
+        if platform_type == "UGV":
+            return QPen(base_color, 1.6, Qt.PenStyle.DashLine)
+        return QPen(base_color, 1.8, Qt.PenStyle.SolidLine)
 
     def _refresh_all_estimated_track_paths(self) -> None:
         for platform_id in self.track_items:

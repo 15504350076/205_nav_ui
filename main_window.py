@@ -42,6 +42,26 @@ from models import PlatformState
 from platform_manager import PlatformManager
 
 
+class NumericTableWidgetItem(QTableWidgetItem):
+    """支持数值排序的表格单元格。"""
+
+    def __init__(self, text: str, numeric_value: float) -> None:
+        super().__init__(text)
+        self.numeric_value = float(numeric_value)
+
+    def set_numeric(self, text: str, numeric_value: float) -> None:
+        self.numeric_value = float(numeric_value)
+        self.setText(text)
+
+    def __lt__(self, other: QTableWidgetItem) -> bool:
+        if isinstance(other, NumericTableWidgetItem):
+            return self.numeric_value < other.numeric_value
+        try:
+            return self.numeric_value < float(other.text())
+        except (TypeError, ValueError):
+            return super().__lt__(other)
+
+
 class MainWindow(QMainWindow):
     """主窗口：中间地图，右侧信息栏。"""
 
@@ -79,6 +99,8 @@ class MainWindow(QMainWindow):
         self.last_error_alert_timestamp_by_id: dict[str, float] = {}
         self.base_timer_interval_ms = 100
         self.playback_speed = 1.0
+        self._is_loading_ui_state = False
+        self._ui_state_ready = False
         self.packet_loss_controls_supported = all(
             hasattr(self.data_source, name)
             for name in ("set_packet_loss_enabled", "set_packet_loss_rate")
@@ -96,6 +118,8 @@ class MainWindow(QMainWindow):
 
         self._load_pinned_exports()
         self._init_ui()
+        self._load_ui_state()
+        self._ui_state_ready = True
         self.refresh_export_index()
         self._load_initial_data()
 
@@ -321,6 +345,8 @@ class MainWindow(QMainWindow):
         help_layout.addWidget(QLabel("35. 双击告警统计来源可快速筛选告警"))
         help_layout.addWidget(QLabel("36. 平台列表支持点击表头排序"))
         help_layout.addWidget(QLabel("37. 可开启速度矢量显示方向与速度大小"))
+        help_layout.addWidget(QLabel("38. 平台筛选条件可在重启后自动恢复"))
+        help_layout.addWidget(QLabel("39. 告警误差阈值支持按UAV/UGV类型分别配置"))
 
         export_index_group = QGroupBox("导出索引")
         export_index_layout = QVBoxLayout(export_index_group)
@@ -514,7 +540,7 @@ class MainWindow(QMainWindow):
         alert_group = QGroupBox("告警中心")
         alert_layout = QVBoxLayout(alert_group)
         alert_threshold_row = QHBoxLayout()
-        alert_threshold_row.addWidget(QLabel("误差阈值(m)"))
+        alert_threshold_row.addWidget(QLabel("统一误差阈值(m)"))
         self.alert_error_threshold_spin = QDoubleSpinBox()
         self.alert_error_threshold_spin.setDecimals(1)
         self.alert_error_threshold_spin.setRange(0.1, 50.0)
@@ -522,6 +548,31 @@ class MainWindow(QMainWindow):
         self.alert_error_threshold_spin.setValue(4.0)
         alert_threshold_row.addWidget(self.alert_error_threshold_spin)
         alert_layout.addLayout(alert_threshold_row)
+
+        alert_type_threshold_row = QHBoxLayout()
+        self.alert_use_type_threshold_checkbox = QCheckBox("按类型阈值")
+        self.alert_use_type_threshold_checkbox.setChecked(False)
+        self.alert_use_type_threshold_checkbox.toggled.connect(self.on_alert_threshold_mode_toggled)
+        alert_type_threshold_row.addWidget(self.alert_use_type_threshold_checkbox)
+
+        alert_type_threshold_row.addWidget(QLabel("UAV"))
+        self.alert_error_threshold_uav_spin = QDoubleSpinBox()
+        self.alert_error_threshold_uav_spin.setDecimals(1)
+        self.alert_error_threshold_uav_spin.setRange(0.1, 50.0)
+        self.alert_error_threshold_uav_spin.setSingleStep(0.5)
+        self.alert_error_threshold_uav_spin.setValue(4.0)
+        self.alert_error_threshold_uav_spin.setEnabled(False)
+        alert_type_threshold_row.addWidget(self.alert_error_threshold_uav_spin)
+
+        alert_type_threshold_row.addWidget(QLabel("UGV"))
+        self.alert_error_threshold_ugv_spin = QDoubleSpinBox()
+        self.alert_error_threshold_ugv_spin.setDecimals(1)
+        self.alert_error_threshold_ugv_spin.setRange(0.1, 50.0)
+        self.alert_error_threshold_ugv_spin.setSingleStep(0.5)
+        self.alert_error_threshold_ugv_spin.setValue(4.0)
+        self.alert_error_threshold_ugv_spin.setEnabled(False)
+        alert_type_threshold_row.addWidget(self.alert_error_threshold_ugv_spin)
+        alert_layout.addLayout(alert_type_threshold_row)
 
         alert_filter_row = QHBoxLayout()
         alert_filter_row.addWidget(QLabel("级别"))
@@ -791,10 +842,31 @@ class MainWindow(QMainWindow):
     def on_follow_toggled(self, enabled: bool) -> None:
         self.map_view.set_follow_selected(enabled)
         self.follow_lock_checkbox.setEnabled(enabled)
+        self._save_ui_state()
 
     def on_track_duration_changed(self, duration_sec: float) -> None:
         self.map_view.set_track_duration(duration_sec)
         self.status_bar.showMessage(f"已设置轨迹时间窗: {duration_sec:.1f}s")
+        self._save_ui_state()
+
+    def on_alert_threshold_mode_toggled(self, enabled: bool) -> None:
+        self.alert_error_threshold_uav_spin.setEnabled(enabled)
+        self.alert_error_threshold_ugv_spin.setEnabled(enabled)
+        if enabled:
+            self.status_bar.showMessage("已启用按平台类型误差阈值")
+        else:
+            self.status_bar.showMessage("已切换为统一误差阈值")
+        self._save_ui_state()
+
+    def _error_threshold_for_platform_type(self, platform_type: str) -> float:
+        if not self.alert_use_type_threshold_checkbox.isChecked():
+            return self.alert_error_threshold_spin.value()
+        normalized_type = platform_type.upper()
+        if normalized_type == "UAV":
+            return self.alert_error_threshold_uav_spin.value()
+        if normalized_type == "UGV":
+            return self.alert_error_threshold_ugv_spin.value()
+        return self.alert_error_threshold_spin.value()
 
     def on_stale_timeout_changed(self, value: float) -> None:
         self.platform_manager.set_stale_timeout(value)
@@ -1172,21 +1244,26 @@ class MainWindow(QMainWindow):
         for platform_id in removed_ids:
             self._append_alert("ERROR", platform_id, "平台超时下线并已移除")
 
-        error_threshold = self.alert_error_threshold_spin.value()
         for state in all_platforms:
             if state.truth_x is None or state.truth_y is None:
                 continue
             planar_error = math.hypot(state.x - state.truth_x, state.y - state.truth_y)
+            error_threshold = self._error_threshold_for_platform_type(state.type)
             if planar_error <= error_threshold:
                 continue
             last_alert_ts = self.last_error_alert_timestamp_by_id.get(state.id, -1e9)
             if state.timestamp - last_alert_ts < 1.5:
                 continue
             self.last_error_alert_timestamp_by_id[state.id] = state.timestamp
+            threshold_scope = (
+                f"{state.type}阈值"
+                if self.alert_use_type_threshold_checkbox.isChecked()
+                else "统一阈值"
+            )
             self._append_alert(
                 "WARN",
                 state.id,
-                f"平面误差超阈值: {planar_error:.2f} m (> {error_threshold:.2f} m)",
+                f"平面误差超阈值: {planar_error:.2f} m (> {error_threshold:.2f} m, {threshold_scope})",
             )
 
         self.last_stale_platform_ids = set(stale_ids)
@@ -1253,6 +1330,7 @@ class MainWindow(QMainWindow):
                 del blocker
         self.apply_alert_filters()
         self.status_bar.showMessage("告警筛选已重置")
+        self._save_ui_state()
 
     def _collect_alert_statistics(
         self,
@@ -1535,6 +1613,147 @@ class MainWindow(QMainWindow):
             focus_row = 0
         self.export_index_table.selectRow(focus_row)
 
+    def _ui_state_store_path(self) -> Path:
+        return Path.cwd() / "exports" / ".ui_state.json"
+
+    def _set_combo_to_saved_data(self, combo: QComboBox, value: object) -> None:
+        index = combo.findData(value)
+        if index >= 0:
+            combo.setCurrentIndex(index)
+
+    def _load_ui_state(self) -> None:
+        store_path = self._ui_state_store_path()
+        if not store_path.exists():
+            return
+        try:
+            data = json.loads(store_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        if not isinstance(data, dict):
+            return
+
+        def _safe_float(value: object, default: float) -> float:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return default
+
+        self._is_loading_ui_state = True
+        try:
+            blockers = [
+                QSignalBlocker(self.platform_type_filter_combo),
+                QSignalBlocker(self.platform_status_filter_combo),
+                QSignalBlocker(self.platform_keyword_edit),
+                QSignalBlocker(self.alert_level_filter_combo),
+                QSignalBlocker(self.alert_status_filter_combo),
+                QSignalBlocker(self.alert_keyword_edit),
+            ]
+            try:
+                platform_type_filter = data.get("platform_type_filter", "all")
+                platform_status_filter = data.get("platform_status_filter", "all")
+                platform_keyword = str(data.get("platform_keyword", ""))
+                self._set_combo_to_saved_data(self.platform_type_filter_combo, platform_type_filter)
+                self._set_combo_to_saved_data(self.platform_status_filter_combo, platform_status_filter)
+                self.platform_keyword_edit.setText(platform_keyword)
+
+                alert_level_filter = data.get("alert_level_filter", "all")
+                alert_status_filter = data.get("alert_status_filter", "all")
+                alert_keyword = str(data.get("alert_keyword", ""))
+                self._set_combo_to_saved_data(self.alert_level_filter_combo, alert_level_filter)
+                self._set_combo_to_saved_data(self.alert_status_filter_combo, alert_status_filter)
+                self.alert_keyword_edit.setText(alert_keyword)
+            finally:
+                for blocker in blockers:
+                    del blocker
+
+            self.follow_checkbox.setChecked(bool(data.get("follow_selected", False)))
+            self.follow_lock_checkbox.setChecked(bool(data.get("follow_lock_when_enabled", True)))
+            self.track_checkbox.setChecked(bool(data.get("show_tracks", True)))
+            self.label_checkbox.setChecked(bool(data.get("show_labels", True)))
+            self.truth_checkbox.setChecked(bool(data.get("show_truth_points", True)))
+            self.truth_track_checkbox.setChecked(bool(data.get("show_truth_tracks", True)))
+            self.velocity_vector_checkbox.setChecked(bool(data.get("show_velocity_vectors", False)))
+
+            self.track_duration_spin.setValue(
+                _safe_float(data.get("track_duration_sec"), self.track_duration_spin.value())
+            )
+
+            self.alert_error_threshold_spin.setValue(
+                _safe_float(data.get("alert_error_threshold"), self.alert_error_threshold_spin.value())
+            )
+            self.alert_use_type_threshold_checkbox.setChecked(
+                bool(data.get("alert_use_type_threshold", False))
+            )
+            self.alert_error_threshold_uav_spin.setValue(
+                _safe_float(
+                    data.get("alert_error_threshold_uav"),
+                    self.alert_error_threshold_uav_spin.value(),
+                )
+            )
+            self.alert_error_threshold_ugv_spin.setValue(
+                _safe_float(
+                    data.get("alert_error_threshold_ugv"),
+                    self.alert_error_threshold_ugv_spin.value(),
+                )
+            )
+
+            sort_column_raw = data.get("platform_sort_column", 0)
+            sort_order_raw = data.get("platform_sort_order", Qt.SortOrder.AscendingOrder.value)
+            try:
+                sort_column = int(sort_column_raw)
+            except (TypeError, ValueError):
+                sort_column = 0
+            try:
+                sort_order = Qt.SortOrder(int(sort_order_raw))
+            except (TypeError, ValueError):
+                sort_order = Qt.SortOrder.AscendingOrder
+            if 0 <= sort_column < self.platform_table.columnCount():
+                self.platform_table.horizontalHeader().setSortIndicator(sort_column, sort_order)
+                self.platform_table.sortByColumn(sort_column, sort_order)
+
+            self.apply_platform_table_filters()
+            self.apply_alert_filters()
+        finally:
+            self._is_loading_ui_state = False
+
+    def _save_ui_state(self) -> None:
+        if self._is_loading_ui_state or not self._ui_state_ready:
+            return
+        store_path = self._ui_state_store_path()
+        store_path.parent.mkdir(parents=True, exist_ok=True)
+        sort_column = self.platform_table.horizontalHeader().sortIndicatorSection()
+        sort_order = self.platform_table.horizontalHeader().sortIndicatorOrder().value
+
+        payload = {
+            "platform_type_filter": self.platform_type_filter_combo.currentData(),
+            "platform_status_filter": self.platform_status_filter_combo.currentData(),
+            "platform_keyword": self.platform_keyword_edit.text().strip(),
+            "platform_sort_column": sort_column,
+            "platform_sort_order": sort_order,
+            "alert_level_filter": self.alert_level_filter_combo.currentData(),
+            "alert_status_filter": self.alert_status_filter_combo.currentData(),
+            "alert_keyword": self.alert_keyword_edit.text().strip(),
+            "follow_selected": self.follow_checkbox.isChecked(),
+            "follow_lock_when_enabled": self.follow_lock_checkbox.isChecked(),
+            "show_tracks": self.track_checkbox.isChecked(),
+            "show_labels": self.label_checkbox.isChecked(),
+            "show_truth_points": self.truth_checkbox.isChecked(),
+            "show_truth_tracks": self.truth_track_checkbox.isChecked(),
+            "show_velocity_vectors": self.velocity_vector_checkbox.isChecked(),
+            "track_duration_sec": self.track_duration_spin.value(),
+            "alert_error_threshold": self.alert_error_threshold_spin.value(),
+            "alert_use_type_threshold": self.alert_use_type_threshold_checkbox.isChecked(),
+            "alert_error_threshold_uav": self.alert_error_threshold_uav_spin.value(),
+            "alert_error_threshold_ugv": self.alert_error_threshold_ugv_spin.value(),
+        }
+        try:
+            store_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError:
+            return
+
     def _pinned_store_path(self) -> Path:
         return Path.cwd() / "exports" / ".pinned_exports.json"
 
@@ -1788,8 +2007,13 @@ class MainWindow(QMainWindow):
                 self._set_table_text(row, 0, platform_id)
                 self._set_table_text(row, 1, str(platform_info.type))
 
-            self._set_table_text(row, 2, f"{platform_info.speed:.2f}")
-            self._set_table_text(row, 3, f"{platform_info.timestamp:.2f}")
+            self._set_table_numeric_text(row, 2, f"{platform_info.speed:.2f}", platform_info.speed)
+            self._set_table_numeric_text(
+                row,
+                3,
+                f"{platform_info.timestamp:.2f}",
+                platform_info.timestamp,
+            )
             is_stale = self.platform_manager.is_platform_stale(platform_id)
             self._set_table_text(row, 4, "超时" if is_stale else "正常")
             self._set_row_style(row, is_stale)
@@ -1865,10 +2089,12 @@ class MainWindow(QMainWindow):
                 del blocker
         self.apply_platform_table_filters()
         self.status_bar.showMessage("平台列表筛选已重置")
+        self._save_ui_state()
 
     def on_platform_table_sort_changed(self, _col: int, _order: Qt.SortOrder) -> None:
         self._rebuild_platform_row_mapping()
         self.apply_platform_table_filters()
+        self._save_ui_state()
 
     def _set_table_text(self, row: int, col: int, text: str) -> None:
         item = self.platform_table.item(row, col)
@@ -1876,6 +2102,14 @@ class MainWindow(QMainWindow):
             item = QTableWidgetItem()
             self.platform_table.setItem(row, col, item)
         item.setText(text)
+
+    def _set_table_numeric_text(self, row: int, col: int, text: str, numeric_value: float) -> None:
+        item = self.platform_table.item(row, col)
+        if isinstance(item, NumericTableWidgetItem):
+            item.set_numeric(text, numeric_value)
+            return
+        numeric_item = NumericTableWidgetItem(text, numeric_value)
+        self.platform_table.setItem(row, col, numeric_item)
 
     def _set_row_style(self, row: int, is_stale: bool) -> None:
         if is_stale:
@@ -1935,11 +2169,15 @@ class MainWindow(QMainWindow):
             del blocker
             self._syncing_table_selection = False
 
+    def closeEvent(self, event) -> None:
+        self._save_ui_state()
+        super().closeEvent(event)
+
     def show_about(self) -> None:
         QMessageBox.information(
             self,
             "关于",
-            "205_nav_ui 原型（第三十二步）\n\n"
+            "205_nav_ui 原型（第三十三步）\n\n"
             "当前功能：\n"
             "- UAV/UGV 不同图形显示\n"
             "- 平台状态统一dataclass（含在线与真值预留字段）\n"
@@ -1961,9 +2199,12 @@ class MainWindow(QMainWindow):
             "- 双击告警统计来源可快速筛选告警\n"
             "- 平台列表支持类型/状态/关键字筛选\n"
             "- 平台列表支持点击表头排序\n"
+            "- 平台筛选条件与排序支持重启恢复\n"
             "- 平台列表统计概览（可见/总数/UAV/UGV/正常/超时）\n"
             "- 轨迹时间窗可在线调节\n"
             "- 速度矢量显示开关\n"
+            "- 速度矢量样式区分UAV/UGV\n"
+            "- 误差告警阈值支持统一/按类型配置\n"
             "- 回放时间轴拖动定位\n"
             "- 平台列表联动选中与定位\n"
             "- 数据新鲜度告警（超时灰显）\n"
