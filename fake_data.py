@@ -2,7 +2,7 @@ import math
 import random
 
 from data_source import PlatformDataSource
-from models import PlatformState
+from platform_state import PlatformState
 
 
 class FakeDataGenerator(PlatformDataSource):

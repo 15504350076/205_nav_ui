@@ -4,6 +4,8 @@ from PySide6.QtCore import Qt, QRectF
 from PySide6.QtGui import QBrush, QPen, QColor
 from PySide6.QtWidgets import QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsSimpleTextItem
 
+from platform_state import PlatformState
+
 
 def _fill_color(platform_type: str) -> QColor:
     if platform_type.upper() == "UAV":
@@ -34,7 +36,7 @@ class PlatformItem(QGraphicsEllipseItem):
         x: float,
         y: float,
         z: float,
-        on_selected: Optional[Callable[[dict], None]] = None,
+        on_selected: Optional[Callable[[PlatformState], None]] = None,
     ) -> None:
         super().__init__()
         self.platform_id = platform_id
@@ -86,14 +88,14 @@ class PlatformItem(QGraphicsEllipseItem):
         self.z_val = z
         self.setPos(self.x_val, self.y_val)
 
-    def get_info(self) -> dict:
-        return {
-            "id": self.platform_id,
-            "type": self.platform_type,
-            "x": self.x_val,
-            "y": self.y_val,
-            "z": self.z_val,
-        }
+    def get_info(self) -> PlatformState:
+        return PlatformState(
+            id=self.platform_id,
+            type=self.platform_type,
+            x=self.x_val,
+            y=self.y_val,
+            z=self.z_val,
+        )
 
     def get_track_color(self) -> QColor:
         return _fill_color(self.platform_type)
@@ -117,7 +119,7 @@ class UGVPlatformItem(QGraphicsRectItem):
         x: float,
         y: float,
         z: float,
-        on_selected: Optional[Callable[[dict], None]] = None,
+        on_selected: Optional[Callable[[PlatformState], None]] = None,
     ) -> None:
         super().__init__()
         self.platform_id = platform_id
@@ -169,14 +171,14 @@ class UGVPlatformItem(QGraphicsRectItem):
         self.z_val = z
         self.setPos(self.x_val, self.y_val)
 
-    def get_info(self) -> dict:
-        return {
-            "id": self.platform_id,
-            "type": self.platform_type,
-            "x": self.x_val,
-            "y": self.y_val,
-            "z": self.z_val,
-        }
+    def get_info(self) -> PlatformState:
+        return PlatformState(
+            id=self.platform_id,
+            type=self.platform_type,
+            x=self.x_val,
+            y=self.y_val,
+            z=self.z_val,
+        )
 
     def get_track_color(self) -> QColor:
         return _fill_color(self.platform_type)
@@ -193,7 +195,7 @@ def create_platform_item(
     x: float,
     y: float,
     z: float,
-    on_selected: Optional[Callable[[dict], None]] = None,
+    on_selected: Optional[Callable[[PlatformState], None]] = None,
 ):
     if platform_type.upper() == "UGV":
         return UGVPlatformItem(

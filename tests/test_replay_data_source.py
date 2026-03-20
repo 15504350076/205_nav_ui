@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from models import PlatformState
+from platform_state import PlatformState
 from replay_data_source import ReplayDataSource
 
 

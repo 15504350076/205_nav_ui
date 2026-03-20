@@ -4,14 +4,8 @@ import math
 from dataclasses import dataclass, field
 from typing import Callable
 
-from models import PlatformState
-
-
-@dataclass(slots=True, frozen=True)
-class RuntimeAlertEvent:
-    level: str
-    source: str
-    message: str
+from alert_event import AlertEvent
+from platform_state import PlatformState
 
 
 @dataclass(slots=True)
@@ -45,8 +39,8 @@ class RuntimeAlertEngine:
         cooldown_sec: float,
         escalate_count: int,
         threshold_resolver: Callable[[str, str], tuple[float, str]],
-    ) -> list[RuntimeAlertEvent]:
-        events: list[RuntimeAlertEvent] = []
+    ) -> list[AlertEvent]:
+        events: list[AlertEvent] = []
 
         if not trigger_enabled:
             self.error_exceed_count_by_id.clear()
@@ -58,15 +52,15 @@ class RuntimeAlertEngine:
 
         if enable_stale:
             for platform_id in sorted(newly_stale):
-                events.append(RuntimeAlertEvent("WARN", platform_id, "平台状态超时"))
+                events.append(AlertEvent("WARN", platform_id, "平台状态超时"))
 
         if enable_recover:
             for platform_id in sorted(recovered):
-                events.append(RuntimeAlertEvent("INFO", platform_id, "平台恢复正常"))
+                events.append(AlertEvent("INFO", platform_id, "平台恢复正常"))
 
         if enable_offline:
             for platform_id in removed_ids:
-                events.append(RuntimeAlertEvent("ERROR", platform_id, "平台超时下线并已移除"))
+                events.append(AlertEvent("ERROR", platform_id, "平台超时下线并已移除"))
 
         if enable_planar_error:
             active_ids = {str(state.id) for state in all_platforms}
@@ -95,10 +89,10 @@ class RuntimeAlertEngine:
                 self.last_error_alert_timestamp_by_id[platform_id] = state.timestamp
                 level = "ERROR" if exceed_count >= max(1, int(escalate_count)) else "WARN"
                 events.append(
-                    RuntimeAlertEvent(
-                        level,
-                        platform_id,
-                        (
+                    AlertEvent(
+                        level=level,
+                        source=platform_id,
+                        message=(
                             f"平面误差超阈值: {planar_error:.2f} m "
                             f"(> {error_threshold:.2f} m, {threshold_scope}, 连续{exceed_count}次)"
                         ),

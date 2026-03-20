@@ -1,61 +1,19 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-
-@dataclass(slots=True)
-class AlertRecord:
-    epoch: float
-    level: str
-    source: str
-    message: str
-    status: str = "未确认"
-    time_text: str | None = None
-
-    def normalized_time_text(self) -> str:
-        if self.time_text:
-            return self.time_text
-        return datetime.fromtimestamp(self.epoch).strftime("%Y-%m-%d %H:%M:%S")
-
-
-def _to_float(value: Any, default: float) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _to_str(value: Any, default: str) -> str:
-    if value is None:
-        return default
-    return str(value)
+from alert_event import AlertEvent
+AlertRecord = AlertEvent
 
 
 def alert_record_from_dict(payload: dict[str, Any]) -> AlertRecord:
-    epoch = _to_float(payload.get("epoch"), 0.0)
-    return AlertRecord(
-        epoch=epoch,
-        level=_to_str(payload.get("level"), "INFO"),
-        source=_to_str(payload.get("source"), "--"),
-        message=_to_str(payload.get("message"), ""),
-        status=_to_str(payload.get("status"), "未确认"),
-        time_text=_to_str(payload.get("time"), "") or None,
-    )
+    return AlertRecord.from_dict(payload)
 
 
 def alert_record_to_dict(record: AlertRecord) -> dict[str, Any]:
-    return {
-        "epoch": float(record.epoch),
-        "time": record.normalized_time_text(),
-        "level": record.level,
-        "source": record.source,
-        "message": record.message,
-        "status": record.status,
-    }
+    return record.to_dict()
 
 
 def load_alert_history(path: Path) -> list[AlertRecord]:
@@ -109,6 +67,8 @@ def prune_alert_history(
     if max_age_sec <= 0.0:
         return list(records)
     if now_epoch is None:
+        from datetime import datetime
+
         now_epoch = datetime.now().timestamp()
     cutoff = now_epoch - max_age_sec
     return [item for item in records if item.epoch >= cutoff]

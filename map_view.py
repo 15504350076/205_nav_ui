@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
 )
 
-from models import PlatformState
+from platform_state import PlatformState
 from platform_item import create_platform_item
 
 
@@ -298,19 +298,9 @@ class MapView(QGraphicsView):
         if self.follow_selected:
             self._center_on_selected()
 
-    def select_platform(self, platform_info: dict | PlatformState) -> None:
-        if isinstance(platform_info, PlatformState):
-            platform_id = platform_info.id
-            fallback_state = platform_info
-        else:
-            platform_id = str(platform_info["id"])
-            fallback_state = PlatformState(
-                id=platform_id,
-                type=str(platform_info.get("type", "UNKNOWN")),
-                x=float(platform_info.get("x", 0.0)),
-                y=float(platform_info.get("y", 0.0)),
-                z=float(platform_info.get("z", 0.0)),
-            )
+    def select_platform(self, platform_info: PlatformState) -> None:
+        platform_id = platform_info.id
+        fallback_state = platform_info
 
         self.selected_platform_id = platform_id
 
@@ -329,14 +319,7 @@ class MapView(QGraphicsView):
             return False
         platform_info = self.latest_platform_info.get(platform_id)
         if platform_info is None:
-            info = self.platform_items[platform_id].get_info()
-            platform_info = PlatformState(
-                id=info["id"],
-                type=info["type"],
-                x=float(info["x"]),
-                y=float(info["y"]),
-                z=float(info["z"]),
-            )
+            platform_info = self.platform_items[platform_id].get_info()
         self.select_platform(platform_info)
         return True
 

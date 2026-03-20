@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QApplication
 
 from alert_history import load_alert_history
 from main_window import MainWindow
-from models import PlatformState
+from platform_state import PlatformState
 
 
 class EmptyDataSource:

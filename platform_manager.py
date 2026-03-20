@@ -1,4 +1,4 @@
-from models import PlatformState
+from platform_state import PlatformState
 
 
 class PlatformManager:

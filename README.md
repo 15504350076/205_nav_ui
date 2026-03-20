@@ -89,11 +89,16 @@ PySide6 原型界面，用于无人机（UAV）与无人车（UGV）协同导航
 
 ### 3.1 核心分层
 
+- `platform_state.py`
+  - `PlatformState`：统一平台状态模型（含 `to_dict/from_dict`）
 - `models.py`
-  - `PlatformState`：统一平台状态 `dataclass`
-  - 已预留字段：`is_online`、`truth_x/y/z`
+  - 兼容层：对外重导出 `PlatformState`
 - `data_source.py`
-  - `PlatformDataSource` 协议（可替换数据源接口）
+  - `PlatformDataSource` / `ReplayCapableDataSource` 协议（实时/回放统一接口）
+- `replay_data_source.py`
+  - 录制与回放数据源封装（实时源包装、JSONL读写、回放游标控制）
+- `alert_event.py`
+  - 统一告警事件模型（运行态与历史快照共用）
 - `platform_manager.py`
   - 集中管理平台状态、超时告警、超时移除、选中状态
 - `alert_rules.py`
@@ -106,8 +111,6 @@ PySide6 原型界面，用于无人机（UAV）与无人车（UGV）协同导航
   - 告警筛选判定与分组统计聚合（与UI表格解耦的纯逻辑）
 - `alert_runtime.py`
   - 运行态告警规则引擎（超时/恢复/下线/误差升级）
-- `replay_data_source.py`
-  - 录制与回放数据源封装（实时源包装、JSONL读写、回放游标控制）
 - `ui_state.py`
   - 统一管理 UI 筛选/排序/显示开关/阈值配置的序列化与持久化
 - `map_view.py`
@@ -167,9 +170,11 @@ python3 -m pytest -q
 - `tests/test_alert_history.py`
 - `tests/test_alert_history_service.py`
 - `tests/test_alert_center.py`
+- `tests/test_alert_event.py`
 - `tests/test_alert_runtime.py`
 - `tests/test_main_window_alerts.py`
 - `tests/test_main_window_integration.py`
+- `tests/test_platform_state.py`
 - `tests/test_replay_data_source.py`
 
 CI（GitHub Actions）：

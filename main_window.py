@@ -36,10 +36,10 @@ from PySide6.QtWidgets import (
 
 from fake_data import FakeDataGenerator
 from map_view import MapView
-from data_source import PlatformDataSource
+from data_source import PlatformDataSource, ReplayCapableDataSource
 from replay_data_source import ReplayDataSource
 from error_plot_widget import ErrorPlotWidget
-from models import PlatformState
+from platform_state import PlatformState
 from platform_manager import PlatformManager
 from alert_rules import (
     AlertThresholdConfig,
@@ -90,7 +90,7 @@ class MainWindow(QMainWindow):
         self.resize(1200, 700)
 
         live_source = data_source if data_source is not None else FakeDataGenerator()
-        self.data_source = ReplayDataSource(live_source)
+        self.data_source: ReplayCapableDataSource = ReplayDataSource(live_source)
         self.platform_manager = PlatformManager(stale_timeout_sec=0.6, remove_timeout_sec=3.0)
 
         self.id_label = QLabel("--")

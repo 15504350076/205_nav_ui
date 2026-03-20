@@ -1,5 +1,5 @@
 from alert_runtime import RuntimeAlertEngine
-from models import PlatformState
+from platform_state import PlatformState
 
 
 def make_state(

@@ -8,7 +8,7 @@ import pytest
 from PySide6.QtWidgets import QApplication
 
 from main_window import MainWindow
-from models import PlatformState
+from platform_state import PlatformState
 
 
 class EmptyDataSource:
