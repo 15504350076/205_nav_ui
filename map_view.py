@@ -1,3 +1,4 @@
+import math
 from typing import Callable
 
 from PySide6.QtCore import Qt, QPointF, QRectF
@@ -27,11 +28,15 @@ class MapView(QGraphicsView):
         self.track_items: dict[str, QGraphicsPathItem] = {}
         self.track_history: dict[str, list[QPointF]] = {}
         self.truth_items: dict[str, QGraphicsEllipseItem] = {}
+        self.truth_track_items: dict[str, QGraphicsPathItem] = {}
+        self.truth_track_history: dict[str, list[QPointF]] = {}
+        self.planar_error_history: dict[str, list[float]] = {}
         self.stale_platform_ids: set[str] = set()
         self.selected_platform_id: str | None = None
         self.show_tracks = True
         self.show_labels = True
         self.show_truth_points = True
+        self.show_truth_tracks = True
         self.follow_selected = False
         self.lock_pan_when_follow = True
         self.max_track_points = 120
@@ -87,6 +92,20 @@ class MapView(QGraphicsView):
         truth_text.setBrush(QBrush(QColor(230, 230, 230)))
         truth_text.setPos(legend_x + 22, legend_y + 72)
         self.scene.addItem(truth_text)
+
+        truth_track_line = QGraphicsPathItem()
+        truth_track_path = QPainterPath()
+        truth_track_path.moveTo(0, 0)
+        truth_track_path.lineTo(16, 0)
+        truth_track_line.setPath(truth_track_path)
+        truth_track_line.setPen(QPen(QColor(120, 220, 120), 1.4, Qt.PenStyle.DashLine))
+        truth_track_line.setPos(legend_x, legend_y + 97)
+        self.scene.addItem(truth_track_line)
+
+        truth_track_text = QGraphicsSimpleTextItem("Truth Track")
+        truth_track_text.setBrush(QBrush(QColor(230, 230, 230)))
+        truth_track_text.setPos(legend_x + 22, legend_y + 90)
+        self.scene.addItem(truth_track_text)
 
     def drawBackground(self, painter: QPainter, rect) -> None:
         super().drawBackground(painter, rect)
@@ -147,6 +166,15 @@ class MapView(QGraphicsView):
         self.truth_items[platform_info.id] = truth_item
         self._update_truth_marker(platform_info.id, platform_info)
 
+        truth_track_item = QGraphicsPathItem()
+        truth_track_item.setPen(QPen(QColor(120, 220, 120), 1.4, Qt.PenStyle.DashLine))
+        truth_track_item.setZValue(-1.2)
+        self.scene.addItem(truth_track_item)
+        self.truth_track_items[platform_info.id] = truth_track_item
+        self.truth_track_history[platform_info.id] = []
+        self.planar_error_history[platform_info.id] = []
+        self._update_truth_track(platform_info.id, platform_info)
+
     def update_platform(self, platform_info: PlatformState) -> None:
         platform_id = platform_info.id
         if platform_id not in self.platform_items:
@@ -163,6 +191,7 @@ class MapView(QGraphicsView):
         self.latest_platform_info[platform_id] = platform_info
         self._update_track(platform_id, platform_info.x, platform_info.y)
         self._update_truth_marker(platform_id, platform_info)
+        self._update_truth_track(platform_id, platform_info)
 
     def _update_track(self, platform_id: str, x: float, y: float) -> None:
         if platform_id not in self.track_history:
@@ -294,6 +323,22 @@ class MapView(QGraphicsView):
             has_truth = state.truth_x is not None and state.truth_y is not None
             truth_item.setVisible(self.show_truth_points and has_truth)
 
+    def set_show_truth_tracks(self, show: bool) -> None:
+        self.show_truth_tracks = show
+        for platform_id, track_item in self.truth_track_items.items():
+            if not show:
+                track_item.setPath(QPainterPath())
+                continue
+            history = self.truth_track_history.get(platform_id, [])
+            if len(history) < 2:
+                track_item.setPath(QPainterPath())
+                continue
+            path = QPainterPath()
+            path.moveTo(history[0])
+            for point in history[1:]:
+                path.lineTo(point)
+            track_item.setPath(path)
+
     def set_follow_selected(self, follow: bool) -> None:
         self.follow_selected = follow
         self._update_drag_mode()
@@ -322,11 +367,49 @@ class MapView(QGraphicsView):
     def get_all_platform_infos(self) -> list[PlatformState]:
         return list(self.latest_platform_info.values())
 
+    def get_platform_error_metrics(self, platform_id: str) -> dict[str, float | None] | None:
+        state = self.latest_platform_info.get(platform_id)
+        if state is None:
+            return None
+
+        current_planar_error: float | None = None
+        if state.truth_x is not None and state.truth_y is not None:
+            current_planar_error = math.hypot(state.x - state.truth_x, state.y - state.truth_y)
+
+        error_history = self.planar_error_history.get(platform_id, [])
+        if error_history:
+            mean_sq = sum(err * err for err in error_history) / len(error_history)
+            rms_error = math.sqrt(mean_sq)
+        else:
+            rms_error = None
+
+        return {
+            "planar_error": current_planar_error,
+            "rms_planar_error": rms_error,
+        }
+
+    def get_selected_error_metrics(self) -> dict[str, float | None] | None:
+        if self.selected_platform_id is None:
+            return None
+        return self.get_platform_error_metrics(self.selected_platform_id)
+
     def clear_tracks(self) -> None:
         for platform_id in self.track_history:
             current_item = self.platform_items[platform_id]
             self.track_history[platform_id] = [QPointF(current_item.x_val, current_item.y_val)]
             self.track_items[platform_id].setPath(QPainterPath())
+
+            state = self.latest_platform_info.get(platform_id)
+            truth_history: list[QPointF] = []
+            error_history: list[float] = []
+            if state is not None and state.truth_x is not None and state.truth_y is not None:
+                truth_history.append(QPointF(state.truth_x, state.truth_y))
+                error_history.append(math.hypot(state.x - state.truth_x, state.y - state.truth_y))
+            self.truth_track_history[platform_id] = truth_history
+            self.planar_error_history[platform_id] = error_history
+            truth_track_item = self.truth_track_items.get(platform_id)
+            if truth_track_item is not None:
+                truth_track_item.setPath(QPainterPath())
 
     def get_selected_platform_info(self) -> PlatformState | None:
         if self.selected_platform_id is None:
@@ -370,11 +453,17 @@ class MapView(QGraphicsView):
         if track_item is not None:
             self.scene.removeItem(track_item)
 
+        truth_track_item = self.truth_track_items.pop(platform_id, None)
+        if truth_track_item is not None:
+            self.scene.removeItem(truth_track_item)
+
         truth_item = self.truth_items.pop(platform_id, None)
         if truth_item is not None:
             self.scene.removeItem(truth_item)
 
         self.track_history.pop(platform_id, None)
+        self.truth_track_history.pop(platform_id, None)
+        self.planar_error_history.pop(platform_id, None)
         self.latest_platform_info.pop(platform_id, None)
         self.stale_platform_ids.discard(platform_id)
 
@@ -390,3 +479,31 @@ class MapView(QGraphicsView):
             return
         truth_item.setPos(platform_info.truth_x, platform_info.truth_y)
         truth_item.setVisible(self.show_truth_points)
+
+    def _update_truth_track(self, platform_id: str, platform_info: PlatformState) -> None:
+        history = self.truth_track_history.get(platform_id)
+        track_item = self.truth_track_items.get(platform_id)
+        error_history = self.planar_error_history.get(platform_id)
+        if history is None or track_item is None or error_history is None:
+            return
+
+        if platform_info.truth_x is None or platform_info.truth_y is None:
+            track_item.setPath(QPainterPath())
+            return
+
+        history.append(QPointF(platform_info.truth_x, platform_info.truth_y))
+        error_history.append(math.hypot(platform_info.x - platform_info.truth_x, platform_info.y - platform_info.truth_y))
+        if len(history) > self.max_track_points:
+            history.pop(0)
+        if len(error_history) > self.max_track_points:
+            error_history.pop(0)
+
+        if not self.show_truth_tracks or len(history) < 2:
+            track_item.setPath(QPainterPath())
+            return
+
+        path = QPainterPath()
+        path.moveTo(history[0])
+        for point in history[1:]:
+            path.lineTo(point)
+        track_item.setPath(path)

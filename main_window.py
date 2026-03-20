@@ -1,5 +1,3 @@
-import math
-
 from PySide6.QtCore import QSignalBlocker, QTimer
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
@@ -50,6 +48,7 @@ class MainWindow(QMainWindow):
         self.z_label = QLabel("--")
         self.speed_label = QLabel("--")
         self.truth_error_label = QLabel("--")
+        self.truth_rms_error_label = QLabel("--")
         self.timestamp_label = QLabel("--")
         self.platform_row_by_id: dict[str, int] = {}
         self._syncing_table_selection = False
@@ -97,6 +96,7 @@ class MainWindow(QMainWindow):
         form_layout.addRow("Z 坐标:", self.z_label)
         form_layout.addRow("速度:", self.speed_label)
         form_layout.addRow("平面误差:", self.truth_error_label)
+        form_layout.addRow("轨迹RMS误差:", self.truth_rms_error_label)
         form_layout.addRow("时间戳:", self.timestamp_label)
 
         list_group = QGroupBox("平台列表")
@@ -144,6 +144,11 @@ class MainWindow(QMainWindow):
         self.truth_checkbox.setChecked(True)
         self.truth_checkbox.toggled.connect(self.map_view.set_show_truth_points)
         display_layout.addWidget(self.truth_checkbox)
+
+        self.truth_track_checkbox = QCheckBox("显示真值轨迹")
+        self.truth_track_checkbox.setChecked(True)
+        self.truth_track_checkbox.toggled.connect(self.map_view.set_show_truth_tracks)
+        display_layout.addWidget(self.truth_track_checkbox)
 
         clear_track_button = QPushButton("清除轨迹")
         clear_track_button.clicked.connect(self.map_view.clear_tracks)
@@ -207,7 +212,7 @@ class MainWindow(QMainWindow):
         help_layout.addWidget(QLabel("12. 支持全局视图/定位选中/复位视图"))
         help_layout.addWidget(QLabel("13. 支持链路掉帧仿真（用于告警联调）"))
         help_layout.addWidget(QLabel("14. 平台状态统一为dataclass并集中管理"))
-        help_layout.addWidget(QLabel("15. 支持真值点位显示与平面误差"))
+        help_layout.addWidget(QLabel("15. 支持真值点/真值轨迹与误差统计"))
 
         button_group = QGroupBox("控制")
         button_layout = QVBoxLayout(button_group)
@@ -314,14 +319,16 @@ class MainWindow(QMainWindow):
         self.z_label.setText(f"{platform_info.z:.2f}")
         self.speed_label.setText(f"{platform_info.speed:.2f}")
         self.timestamp_label.setText(f"{platform_info.timestamp:.2f}")
-        if platform_info.truth_x is not None and platform_info.truth_y is not None:
-            planar_error = math.hypot(
-                platform_info.x - platform_info.truth_x,
-                platform_info.y - platform_info.truth_y,
-            )
-            self.truth_error_label.setText(f"{planar_error:.2f}")
+
+        error_metrics = self.map_view.get_platform_error_metrics(str(platform_info.id))
+        if error_metrics is not None and error_metrics.get("planar_error") is not None:
+            self.truth_error_label.setText(f'{float(error_metrics["planar_error"]):.2f}')
         else:
             self.truth_error_label.setText("--")
+        if error_metrics is not None and error_metrics.get("rms_planar_error") is not None:
+            self.truth_rms_error_label.setText(f'{float(error_metrics["rms_planar_error"]):.2f}')
+        else:
+            self.truth_rms_error_label.setText("--")
 
         selected_id = str(platform_info.id)
         stale_count = len(self.platform_manager.get_stale_platform_ids())
@@ -336,8 +343,10 @@ class MainWindow(QMainWindow):
         )
         if stale_count > 0:
             message += f" | 超时平台: {stale_count}"
-        if platform_info.truth_x is not None and platform_info.truth_y is not None:
+        if self.truth_error_label.text() != "--":
             message += f" | 平面误差: {self.truth_error_label.text()}"
+        if self.truth_rms_error_label.text() != "--":
+            message += f" | RMS: {self.truth_rms_error_label.text()}"
         if status_prefix:
             message = f"{status_prefix} | {message}"
         self.status_bar.showMessage(message)
@@ -501,6 +510,7 @@ class MainWindow(QMainWindow):
         self.z_label.setText("--")
         self.speed_label.setText("--")
         self.truth_error_label.setText("--")
+        self.truth_rms_error_label.setText("--")
         self.timestamp_label.setText("--")
 
     def on_table_selection_changed(self) -> None:
@@ -536,13 +546,13 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "关于",
-            "205_nav_ui 原型（第十六步）\n\n"
+            "205_nav_ui 原型（第十七步）\n\n"
             "当前功能：\n"
             "- UAV/UGV 不同图形显示\n"
             "- 平台状态统一dataclass（含在线与真值预留字段）\n"
             "- PlatformManager 集中管理状态/告警/移除\n"
             "- 数据源接口抽象，可替换接入\n"
-            "- 真值点显示与平面误差可视化\n"
+            "- 真值点/真值轨迹显示与误差可视化（当前+RMS）\n"
             "- 平台列表联动选中与定位\n"
             "- 数据新鲜度告警（超时灰显）\n"
             "- 下线平台自动移除（图元/轨迹/列表）\n"
