@@ -51,6 +51,13 @@ from alert_rules import (
     get_default_alert_threshold_presets,
     resolve_error_threshold,
 )
+from alert_history import (
+    AlertRecord,
+    export_alert_history_jsonl,
+    load_alert_history,
+    prune_alert_history,
+    save_alert_history,
+)
 from ui_state import UiState, load_ui_state, save_ui_state
 
 
@@ -112,6 +119,7 @@ class MainWindow(QMainWindow):
         self.error_exceed_count_by_id: dict[str, int] = {}
         self.alert_id_threshold_overrides: dict[str, float] = {}
         self.last_alert_threshold_import_meta: AlertThresholdConfigFileMeta | None = None
+        self._is_restoring_alert_history = False
         self.alert_threshold_presets: list[AlertThresholdPreset] = (
             get_default_alert_threshold_presets()
         )
@@ -140,6 +148,7 @@ class MainWindow(QMainWindow):
         self._ui_state_ready = True
         self.refresh_export_index()
         self._load_initial_data()
+        self._auto_restore_alert_history()
 
     def _init_ui(self) -> None:
         central_widget = QWidget()
@@ -377,6 +386,10 @@ class MainWindow(QMainWindow):
         help_layout.addWidget(QLabel("49. 误差告警支持间隔与连续次数升级策略"))
         help_layout.addWidget(QLabel("50. 告警支持一键确认可见未确认与清空可见"))
         help_layout.addWidget(QLabel("51. 告警记录支持JSON导出"))
+        help_layout.addWidget(QLabel("52. 告警支持时间窗筛选"))
+        help_layout.addWidget(QLabel("53. 告警历史支持保存/加载与JSONL导出"))
+        help_layout.addWidget(QLabel("54. 告警历史支持按保留天数清理"))
+        help_layout.addWidget(QLabel("55. 可设置启动自动恢复告警历史"))
 
         export_index_group = QGroupBox("导出索引")
         export_index_layout = QVBoxLayout(export_index_group)
@@ -805,6 +818,29 @@ class MainWindow(QMainWindow):
         alert_filter_row.addWidget(reset_alert_filter_button)
         alert_layout.addLayout(alert_filter_row)
 
+        alert_time_filter_row = QHBoxLayout()
+        alert_time_filter_row.addWidget(QLabel("时间窗"))
+        self.alert_time_filter_combo = QComboBox()
+        self.alert_time_filter_combo.addItem("全部", None)
+        self.alert_time_filter_combo.addItem("最近10分钟", 10 * 60)
+        self.alert_time_filter_combo.addItem("最近1小时", 60 * 60)
+        self.alert_time_filter_combo.addItem("最近24小时", 24 * 60 * 60)
+        self.alert_time_filter_combo.currentIndexChanged.connect(self.apply_alert_filters)
+        alert_time_filter_row.addWidget(self.alert_time_filter_combo)
+
+        self.alert_restore_history_checkbox = QCheckBox("启动恢复历史")
+        self.alert_restore_history_checkbox.setChecked(True)
+        self.alert_restore_history_checkbox.toggled.connect(self.on_alert_history_controls_changed)
+        alert_time_filter_row.addWidget(self.alert_restore_history_checkbox)
+
+        alert_time_filter_row.addWidget(QLabel("保留天数"))
+        self.alert_history_retention_days_spin = QSpinBox()
+        self.alert_history_retention_days_spin.setRange(1, 90)
+        self.alert_history_retention_days_spin.setValue(7)
+        self.alert_history_retention_days_spin.valueChanged.connect(self.on_alert_history_controls_changed)
+        alert_time_filter_row.addWidget(self.alert_history_retention_days_spin)
+        alert_layout.addLayout(alert_time_filter_row)
+
         alert_search_row = QHBoxLayout()
         alert_search_row.addWidget(QLabel("搜索"))
         self.alert_keyword_edit = QLineEdit()
@@ -884,6 +920,24 @@ class MainWindow(QMainWindow):
         refresh_alert_stats_button.clicked.connect(self.update_alert_statistics)
         alert_button_row.addWidget(refresh_alert_stats_button)
         alert_layout.addLayout(alert_button_row)
+
+        alert_history_row = QHBoxLayout()
+        save_alert_history_button = QPushButton("保存历史")
+        save_alert_history_button.clicked.connect(self.on_save_alert_history_snapshot)
+        alert_history_row.addWidget(save_alert_history_button)
+
+        load_alert_history_button = QPushButton("加载历史")
+        load_alert_history_button.clicked.connect(self.on_load_alert_history_snapshot)
+        alert_history_row.addWidget(load_alert_history_button)
+
+        export_alert_history_jsonl_button = QPushButton("导出历史JSONL")
+        export_alert_history_jsonl_button.clicked.connect(self.on_export_alert_history_jsonl)
+        alert_history_row.addWidget(export_alert_history_jsonl_button)
+
+        prune_alert_history_button = QPushButton("清理过期历史")
+        prune_alert_history_button.clicked.connect(self.on_prune_alert_history)
+        alert_history_row.addWidget(prune_alert_history_button)
+        alert_layout.addLayout(alert_history_row)
         self.refresh_alert_id_threshold_table()
         self._refresh_alert_threshold_preset_description()
         self.refresh_alert_threshold_preview_table()
@@ -978,11 +1032,14 @@ class MainWindow(QMainWindow):
 
     def _apply_frame_update(self, platform_data: list[PlatformState], status_prefix: str = "") -> None:
         removed_ids = self.platform_manager.apply_updates(platform_data)
+        all_platforms = self.platform_manager.get_all_platforms()
+        stale_ids = self.platform_manager.get_stale_platform_ids()
         if removed_ids:
             self.map_view.remove_platforms(removed_ids)
-        self.map_view.update_platforms(self.platform_manager.get_all_platforms())
-        self.map_view.set_stale_platforms(self.platform_manager.get_stale_platform_ids())
-        self.update_platform_table(self.platform_manager.get_all_platforms())
+        self.map_view.update_platforms(all_platforms)
+        self.map_view.set_stale_platforms(stale_ids)
+        self.update_platform_table(all_platforms)
+        self._raise_runtime_alerts(all_platforms, stale_ids, removed_ids)
         self.refresh_alert_threshold_preview_table()
 
         selected_info = self.map_view.get_selected_platform_info()
@@ -994,7 +1051,7 @@ class MainWindow(QMainWindow):
             self.clear_selected_platform_info()
             self.platform_table.clearSelection()
 
-        stale_count = len(self.platform_manager.get_stale_platform_ids())
+        stale_count = len(stale_ids)
         removed_count = len(removed_ids)
         if stale_count > 0:
             message = (
@@ -1106,6 +1163,128 @@ class MainWindow(QMainWindow):
         if self._is_loading_ui_state:
             return
         self._save_ui_state()
+
+    def on_alert_history_controls_changed(self, _value: object | None = None) -> None:
+        if self._is_loading_ui_state:
+            return
+        self._save_ui_state()
+
+    def _alert_history_store_path(self) -> Path:
+        return Path.cwd() / "exports" / "alerts" / ".alert_history.json"
+
+    def _collect_alert_records(self, visible_only: bool = False) -> list[AlertRecord]:
+        records: list[AlertRecord] = []
+        for row in range(self.alert_table.rowCount()):
+            if visible_only and self.alert_table.isRowHidden(row):
+                continue
+            time_item = self.alert_table.item(row, 0)
+            level_item = self.alert_table.item(row, 1)
+            source_item = self.alert_table.item(row, 2)
+            message_item = self.alert_table.item(row, 3)
+            status_item = self.alert_table.item(row, 4)
+
+            epoch_value = 0.0
+            if time_item is not None:
+                raw_epoch = time_item.data(Qt.ItemDataRole.UserRole)
+                if isinstance(raw_epoch, (float, int)):
+                    epoch_value = float(raw_epoch)
+            records.append(
+                AlertRecord(
+                    epoch=epoch_value,
+                    time_text=time_item.text() if time_item is not None else "",
+                    level=level_item.text() if level_item is not None else "INFO",
+                    source=source_item.text() if source_item is not None else "--",
+                    message=message_item.text() if message_item is not None else "",
+                    status=status_item.text() if status_item is not None else "未确认",
+                )
+            )
+        return records
+
+    def _persist_alert_history_snapshot(self) -> None:
+        if self._is_restoring_alert_history:
+            return
+        records = self._collect_alert_records(visible_only=False)
+        save_alert_history(self._alert_history_store_path(), records)
+
+    def _restore_alert_history_records(
+        self,
+        records: list[AlertRecord],
+        *,
+        clear_existing: bool,
+    ) -> None:
+        self._is_restoring_alert_history = True
+        try:
+            if clear_existing:
+                self.alert_table.setRowCount(0)
+            for record in records:
+                self._append_alert(
+                    record.level,
+                    record.source,
+                    record.message,
+                    timestamp_epoch=record.epoch,
+                    status_text=record.status,
+                    time_text=record.normalized_time_text(),
+                    apply_filters=False,
+                    persist_history=False,
+                )
+            self.apply_alert_filters()
+        finally:
+            self._is_restoring_alert_history = False
+
+    def _auto_restore_alert_history(self) -> None:
+        if not self.alert_restore_history_checkbox.isChecked():
+            return
+        records = load_alert_history(self._alert_history_store_path())
+        if not records:
+            return
+        self._restore_alert_history_records(records, clear_existing=False)
+        self._persist_alert_history_snapshot()
+        self.status_bar.showMessage(f"已自动恢复告警历史: {len(records)} 条")
+
+    def on_save_alert_history_snapshot(self) -> None:
+        records = self._collect_alert_records(visible_only=False)
+        if save_alert_history(self._alert_history_store_path(), records):
+            self.status_bar.showMessage(
+                f"已保存告警历史: {len(records)} 条 -> {self._alert_history_store_path()}"
+            )
+            return
+        self.status_bar.showMessage("保存告警历史失败")
+
+    def on_load_alert_history_snapshot(self) -> None:
+        records = load_alert_history(self._alert_history_store_path())
+        if not records:
+            self.status_bar.showMessage("未找到可用告警历史")
+            return
+        self._restore_alert_history_records(records, clear_existing=True)
+        self.status_bar.showMessage(f"已加载告警历史: {len(records)} 条")
+
+    def on_export_alert_history_jsonl(self) -> None:
+        records = self._collect_alert_records(visible_only=False)
+        if not records:
+            self.status_bar.showMessage("当前无告警历史可导出")
+            return
+        export_dir = Path.cwd() / "exports" / "alerts"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        file_path = export_dir / f"alert_history_{timestamp}.jsonl"
+        if not export_alert_history_jsonl(file_path, records):
+            self.status_bar.showMessage("告警历史JSONL导出失败")
+            return
+        self.refresh_export_index(focus_path=file_path)
+        self.status_bar.showMessage(f"已导出告警历史JSONL: {file_path}")
+
+    def on_prune_alert_history(self) -> None:
+        retention_days = self.alert_history_retention_days_spin.value()
+        max_age_sec = float(retention_days) * 24.0 * 60.0 * 60.0
+        records = self._collect_alert_records(visible_only=False)
+        pruned = prune_alert_history(records, max_age_sec)
+        removed = len(records) - len(pruned)
+        if removed <= 0:
+            self.status_bar.showMessage("无过期告警历史需要清理")
+            return
+        self._restore_alert_history_records(pruned, clear_existing=True)
+        self._persist_alert_history_snapshot()
+        self.status_bar.showMessage(f"已清理过期告警历史: {removed} 条")
 
     def on_alert_id_threshold_mode_toggled(self, enabled: bool) -> None:
         self._set_alert_id_threshold_controls_enabled(enabled)
@@ -1470,7 +1649,13 @@ class MainWindow(QMainWindow):
 
     def on_stale_timeout_changed(self, value: float) -> None:
         self.platform_manager.set_stale_timeout(value)
-        self.map_view.set_stale_platforms(self.platform_manager.get_stale_platform_ids())
+        stale_ids = self.platform_manager.get_stale_platform_ids()
+        self.map_view.set_stale_platforms(stale_ids)
+        self._raise_runtime_alerts(
+            self.platform_manager.get_all_platforms(),
+            stale_ids,
+            [],
+        )
         self.remove_timeout_spin.setMinimum(value)
         if self.remove_timeout_spin.value() < value:
             self.remove_timeout_spin.setValue(value)
@@ -1481,8 +1666,12 @@ class MainWindow(QMainWindow):
             self.map_view.remove_platforms(removed_ids)
             self.clear_selected_platform_info()
             self.platform_table.clearSelection()
-        self.map_view.set_stale_platforms(self.platform_manager.get_stale_platform_ids())
-        self.update_platform_table(self.platform_manager.get_all_platforms())
+        all_platforms = self.platform_manager.get_all_platforms()
+        stale_ids = self.platform_manager.get_stale_platform_ids()
+        self.map_view.set_stale_platforms(stale_ids)
+        self.update_platform_table(all_platforms)
+        self._raise_runtime_alerts(all_platforms, stale_ids, removed_ids)
+        self.refresh_alert_threshold_preview_table()
 
     def on_packet_loss_toggled(self, enabled: bool) -> None:
         if not self.packet_loss_controls_supported:
@@ -1899,15 +2088,31 @@ class MainWindow(QMainWindow):
 
         self.last_stale_platform_ids = set(stale_ids)
 
-    def _append_alert(self, level: str, source: str, message: str) -> None:
+    def _append_alert(
+        self,
+        level: str,
+        source: str,
+        message: str,
+        *,
+        timestamp_epoch: float | None = None,
+        status_text: str = "未确认",
+        time_text: str | None = None,
+        apply_filters: bool = True,
+        persist_history: bool = True,
+    ) -> None:
         row = self.alert_table.rowCount()
         self.alert_table.insertRow(row)
-        now_text = datetime.now().strftime("%H:%M:%S")
-        self.alert_table.setItem(row, 0, QTableWidgetItem(now_text))
+        epoch_value = float(timestamp_epoch) if timestamp_epoch is not None else datetime.now().timestamp()
+        display_time_text = time_text if time_text is not None else datetime.fromtimestamp(epoch_value).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        time_item = QTableWidgetItem(display_time_text)
+        time_item.setData(Qt.ItemDataRole.UserRole, epoch_value)
+        self.alert_table.setItem(row, 0, time_item)
         self.alert_table.setItem(row, 1, QTableWidgetItem(level))
         self.alert_table.setItem(row, 2, QTableWidgetItem(source))
         self.alert_table.setItem(row, 3, QTableWidgetItem(message))
-        status_item = QTableWidgetItem("未确认")
+        status_item = QTableWidgetItem(status_text)
         self.alert_table.setItem(row, 4, status_item)
 
         if level == "ERROR":
@@ -1923,24 +2128,38 @@ class MainWindow(QMainWindow):
 
         while self.alert_table.rowCount() > self.alert_max_rows:
             self.alert_table.removeRow(0)
-        self.apply_alert_filters()
+        if apply_filters:
+            self.apply_alert_filters()
+        if persist_history:
+            self._persist_alert_history_snapshot()
 
     def apply_alert_filters(self, _signal_value: object | None = None) -> None:
         level_filter = self.alert_level_filter_combo.currentData()
         status_filter = self.alert_status_filter_combo.currentData()
+        time_window_sec = self.alert_time_filter_combo.currentData()
         keyword = self.alert_keyword_edit.text().strip().lower()
+        now_epoch = datetime.now().timestamp()
 
         for row in range(self.alert_table.rowCount()):
             level_text = self.alert_table.item(row, 1).text() if self.alert_table.item(row, 1) else ""
             source_text = self.alert_table.item(row, 2).text() if self.alert_table.item(row, 2) else ""
             message_text = self.alert_table.item(row, 3).text() if self.alert_table.item(row, 3) else ""
             status_text = self.alert_table.item(row, 4).text() if self.alert_table.item(row, 4) else ""
+            time_item = self.alert_table.item(row, 0)
+            epoch_value: float | None = None
+            if time_item is not None:
+                raw_epoch = time_item.data(Qt.ItemDataRole.UserRole)
+                if isinstance(raw_epoch, (float, int)):
+                    epoch_value = float(raw_epoch)
 
             visible = True
             if level_filter not in (None, "all") and level_text != str(level_filter):
                 visible = False
             if status_filter not in (None, "all") and status_text != str(status_filter):
                 visible = False
+            if time_window_sec is not None and epoch_value is not None:
+                if now_epoch - epoch_value > float(time_window_sec):
+                    visible = False
             if keyword and keyword not in source_text.lower() and keyword not in message_text.lower():
                 visible = False
             self.alert_table.setRowHidden(row, not visible)
@@ -1950,11 +2169,13 @@ class MainWindow(QMainWindow):
         blockers = (
             QSignalBlocker(self.alert_level_filter_combo),
             QSignalBlocker(self.alert_status_filter_combo),
+            QSignalBlocker(self.alert_time_filter_combo),
             QSignalBlocker(self.alert_keyword_edit),
         )
         try:
             self.alert_level_filter_combo.setCurrentIndex(0)
             self.alert_status_filter_combo.setCurrentIndex(0)
+            self.alert_time_filter_combo.setCurrentIndex(0)
             self.alert_keyword_edit.clear()
         finally:
             for blocker in blockers:
@@ -2033,6 +2254,7 @@ class MainWindow(QMainWindow):
             if status_item is not None:
                 status_item.setText("已确认")
         self.apply_alert_filters()
+        self._persist_alert_history_snapshot()
         self.status_bar.showMessage(f"已确认 {len(selected_rows)} 条告警")
 
     def on_ack_visible_unacked_alerts(self) -> None:
@@ -2047,6 +2269,7 @@ class MainWindow(QMainWindow):
                 status_item.setText("已确认")
                 ack_count += 1
         self.apply_alert_filters()
+        self._persist_alert_history_snapshot()
         self.status_bar.showMessage(f"已确认可见未确认告警: {ack_count} 条")
 
     def on_clear_acknowledged_alerts(self) -> None:
@@ -2057,11 +2280,13 @@ class MainWindow(QMainWindow):
                 self.alert_table.removeRow(row)
                 removed += 1
         self.apply_alert_filters()
+        self._persist_alert_history_snapshot()
         self.status_bar.showMessage(f"已清空 {removed} 条已确认告警")
 
     def on_clear_all_alerts(self) -> None:
         self.alert_table.setRowCount(0)
         self.update_alert_statistics()
+        self._persist_alert_history_snapshot()
         self.status_bar.showMessage("已清空全部告警")
 
     def on_clear_visible_alerts(self) -> None:
@@ -2072,6 +2297,7 @@ class MainWindow(QMainWindow):
             self.alert_table.removeRow(row)
             removed += 1
         self.apply_alert_filters()
+        self._persist_alert_history_snapshot()
         self.status_bar.showMessage(f"已清空可见告警: {removed} 条")
 
     def on_alert_row_double_clicked(self, row: int, _col: int) -> None:
@@ -2226,11 +2452,15 @@ class MainWindow(QMainWindow):
         active_paths: set[str] = set()
 
         if export_root.exists():
-            pinned_store_path = self._pinned_store_path().resolve()
+            internal_store_paths = {
+                self._pinned_store_path().resolve(),
+                self._ui_state_store_path().resolve(),
+                self._alert_history_store_path().resolve(),
+            }
             for path in export_root.rglob("*"):
                 if not path.is_file():
                     continue
-                if path.resolve() == pinned_store_path:
+                if path.resolve() in internal_store_paths:
                     continue
                 try:
                     mtime = path.stat().st_mtime
@@ -2326,6 +2556,7 @@ class MainWindow(QMainWindow):
                 QSignalBlocker(self.platform_keyword_edit),
                 QSignalBlocker(self.alert_level_filter_combo),
                 QSignalBlocker(self.alert_status_filter_combo),
+                QSignalBlocker(self.alert_time_filter_combo),
                 QSignalBlocker(self.alert_keyword_edit),
                 QSignalBlocker(self.alert_threshold_preset_combo),
                 QSignalBlocker(self.alert_trigger_enabled_checkbox),
@@ -2335,6 +2566,8 @@ class MainWindow(QMainWindow):
                 QSignalBlocker(self.alert_enable_offline_checkbox),
                 QSignalBlocker(self.alert_error_cooldown_spin),
                 QSignalBlocker(self.alert_error_escalate_count_spin),
+                QSignalBlocker(self.alert_restore_history_checkbox),
+                QSignalBlocker(self.alert_history_retention_days_spin),
             ]
             try:
                 self._set_combo_to_saved_data(
@@ -2354,6 +2587,10 @@ class MainWindow(QMainWindow):
                 self._set_combo_to_saved_data(
                     self.alert_status_filter_combo,
                     state.alert_status_filter,
+                )
+                self._set_combo_to_saved_data(
+                    self.alert_time_filter_combo,
+                    state.alert_time_filter_sec,
                 )
                 self.alert_keyword_edit.setText(state.alert_keyword)
             finally:
@@ -2376,6 +2613,8 @@ class MainWindow(QMainWindow):
             self.alert_enable_offline_checkbox.setChecked(state.alert_enable_offline)
             self.alert_error_cooldown_spin.setValue(state.alert_error_cooldown_sec)
             self.alert_error_escalate_count_spin.setValue(state.alert_error_escalate_count)
+            self.alert_restore_history_checkbox.setChecked(state.alert_restore_history_on_start)
+            self.alert_history_retention_days_spin.setValue(state.alert_history_retention_days)
             self.alert_error_threshold_spin.setValue(state.alert_error_threshold)
             self.alert_use_type_threshold_checkbox.setChecked(state.alert_use_type_threshold)
             self.alert_error_threshold_uav_spin.setValue(state.alert_error_threshold_uav)
@@ -2418,6 +2657,7 @@ class MainWindow(QMainWindow):
             platform_sort_order=self.platform_table.horizontalHeader().sortIndicatorOrder().value,
             alert_level_filter=str(self.alert_level_filter_combo.currentData()),
             alert_status_filter=str(self.alert_status_filter_combo.currentData()),
+            alert_time_filter_sec=self.alert_time_filter_combo.currentData(),
             alert_keyword=self.alert_keyword_edit.text().strip(),
             follow_selected=self.follow_checkbox.isChecked(),
             follow_lock_when_enabled=self.follow_lock_checkbox.isChecked(),
@@ -2434,6 +2674,8 @@ class MainWindow(QMainWindow):
             alert_enable_offline=self.alert_enable_offline_checkbox.isChecked(),
             alert_error_cooldown_sec=self.alert_error_cooldown_spin.value(),
             alert_error_escalate_count=self.alert_error_escalate_count_spin.value(),
+            alert_restore_history_on_start=self.alert_restore_history_checkbox.isChecked(),
+            alert_history_retention_days=self.alert_history_retention_days_spin.value(),
             alert_error_threshold=self.alert_error_threshold_spin.value(),
             alert_use_type_threshold=self.alert_use_type_threshold_checkbox.isChecked(),
             alert_error_threshold_uav=self.alert_error_threshold_uav_spin.value(),
@@ -2484,6 +2726,8 @@ class MainWindow(QMainWindow):
             return "snapshot"
         if file_name.startswith("alert_threshold_config_") and suffix == ".json":
             return "alert_cfg"
+        if file_name.startswith("alert_history_") and suffix == ".jsonl":
+            return "alerts_json"
         if file_name.startswith("alerts_") and suffix == ".json":
             return "alerts_json"
         if suffix == ".csv":
@@ -2499,7 +2743,7 @@ class MainWindow(QMainWindow):
         if type_key == "alert_cfg":
             return "告警配置JSON"
         if type_key == "alerts_json":
-            return "告警记录JSON"
+            return "告警记录JSON/JSONL"
         if type_key == "error_csv":
             return "误差CSV"
         if type_key == "error_plot":
@@ -2869,13 +3113,14 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         self._save_ui_state()
+        self._persist_alert_history_snapshot()
         super().closeEvent(event)
 
     def show_about(self) -> None:
         QMessageBox.information(
             self,
             "关于",
-            "205_nav_ui 原型（第四十一步）\n\n"
+            "205_nav_ui 原型（第四十二步）\n\n"
             "当前功能：\n"
             "- UAV/UGV 不同图形显示\n"
             "- 平台状态统一dataclass（含在线与真值预留字段）\n"
@@ -2914,6 +3159,9 @@ class MainWindow(QMainWindow):
             "- 误差告警支持连续超阈升级为ERROR\n"
             "- 告警支持一键确认可见未确认与清空可见\n"
             "- 告警记录支持JSON导出\n"
+            "- 告警支持时间窗筛选\n"
+            "- 告警历史支持保存/加载/JSONL导出/按天清理\n"
+            "- 支持启动自动恢复告警历史\n"
             "- 导出索引支持筛选告警配置JSON\n"
             "- 回放时间轴拖动定位\n"
             "- 平台列表联动选中与定位\n"

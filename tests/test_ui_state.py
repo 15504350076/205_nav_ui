@@ -10,6 +10,7 @@ def test_from_dict_parses_basic_fields() -> None:
         "platform_keyword": "UGV",
         "platform_sort_column": 3,
         "platform_sort_order": 1,
+        "alert_time_filter_sec": 600,
         "show_velocity_vectors": True,
         "track_duration_sec": 25.5,
         "alert_trigger_enabled": False,
@@ -19,6 +20,8 @@ def test_from_dict_parses_basic_fields() -> None:
         "alert_enable_offline": False,
         "alert_error_cooldown_sec": 2.3,
         "alert_error_escalate_count": 5,
+        "alert_restore_history_on_start": False,
+        "alert_history_retention_days": 14,
         "alert_threshold_preset_key": "sensitive",
         "alert_use_type_threshold": True,
         "alert_error_threshold_uav": 3.5,
@@ -33,6 +36,7 @@ def test_from_dict_parses_basic_fields() -> None:
     assert state.platform_status_filter == "超时"
     assert state.platform_sort_column == 3
     assert state.platform_sort_order == 1
+    assert state.alert_time_filter_sec == 600
     assert state.show_velocity_vectors is True
     assert state.track_duration_sec == 25.5
     assert state.alert_trigger_enabled is False
@@ -42,6 +46,8 @@ def test_from_dict_parses_basic_fields() -> None:
     assert state.alert_enable_offline is False
     assert state.alert_error_cooldown_sec == 2.3
     assert state.alert_error_escalate_count == 5
+    assert state.alert_restore_history_on_start is False
+    assert state.alert_history_retention_days == 14
     assert state.alert_threshold_preset_key == "sensitive"
     assert state.alert_use_type_threshold is True
     assert state.alert_error_threshold_uav == 3.5
@@ -58,6 +64,7 @@ def test_from_dict_handles_invalid_values_with_defaults() -> None:
         "show_tracks": "false",
         "alert_error_threshold": None,
         "alert_error_escalate_count": "bad",
+        "alert_history_retention_days": "oops",
         "alert_threshold_preset_key": None,
         "alert_id_threshold_overrides": {"  ": "nan", 1: 2.0, "UAV1": "3.3", "UAV2": "nan"},
     }
@@ -70,6 +77,7 @@ def test_from_dict_handles_invalid_values_with_defaults() -> None:
     assert state.show_tracks is False
     assert state.alert_error_threshold == 4.0
     assert state.alert_error_escalate_count == 3
+    assert state.alert_history_retention_days == 7
     assert state.alert_threshold_preset_key == "custom"
     assert state.alert_id_threshold_overrides == {"UAV1": 3.3, "UAV2": 4.0}
 
@@ -85,6 +93,8 @@ def test_ui_state_round_trip_file(tmp_path: Path) -> None:
         alert_enable_planar_error=False,
         alert_error_cooldown_sec=2.0,
         alert_error_escalate_count=4,
+        alert_restore_history_on_start=False,
+        alert_history_retention_days=21,
         alert_threshold_preset_key="ground_focus",
         alert_use_type_threshold=True,
         alert_error_threshold_uav=4.2,

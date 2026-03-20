@@ -57,6 +57,7 @@ class UiState:
     platform_sort_order: int = 0
     alert_level_filter: str = "all"
     alert_status_filter: str = "all"
+    alert_time_filter_sec: float | None = None
     alert_keyword: str = ""
     follow_selected: bool = False
     follow_lock_when_enabled: bool = True
@@ -73,6 +74,8 @@ class UiState:
     alert_enable_offline: bool = True
     alert_error_cooldown_sec: float = 1.5
     alert_error_escalate_count: int = 3
+    alert_restore_history_on_start: bool = True
+    alert_history_retention_days: int = 7
     alert_error_threshold: float = 4.0
     alert_use_type_threshold: bool = False
     alert_error_threshold_uav: float = 4.0
@@ -97,6 +100,11 @@ class UiState:
 
         state.alert_level_filter = _as_str(data.get("alert_level_filter"), state.alert_level_filter)
         state.alert_status_filter = _as_str(data.get("alert_status_filter"), state.alert_status_filter)
+        raw_time_filter = data.get("alert_time_filter_sec")
+        if raw_time_filter is None:
+            state.alert_time_filter_sec = None
+        else:
+            state.alert_time_filter_sec = _as_float(raw_time_filter, 0.0)
         state.alert_keyword = _as_str(data.get("alert_keyword"), state.alert_keyword)
 
         state.follow_selected = _as_bool(data.get("follow_selected"), state.follow_selected)
@@ -141,6 +149,14 @@ class UiState:
         state.alert_error_escalate_count = max(
             1,
             _as_int(data.get("alert_error_escalate_count"), state.alert_error_escalate_count),
+        )
+        state.alert_restore_history_on_start = _as_bool(
+            data.get("alert_restore_history_on_start"),
+            state.alert_restore_history_on_start,
+        )
+        state.alert_history_retention_days = max(
+            1,
+            _as_int(data.get("alert_history_retention_days"), state.alert_history_retention_days),
         )
         state.alert_error_threshold = _as_float(
             data.get("alert_error_threshold"),
@@ -189,6 +205,7 @@ class UiState:
             "platform_sort_order": self.platform_sort_order,
             "alert_level_filter": self.alert_level_filter,
             "alert_status_filter": self.alert_status_filter,
+            "alert_time_filter_sec": self.alert_time_filter_sec,
             "alert_keyword": self.alert_keyword,
             "follow_selected": self.follow_selected,
             "follow_lock_when_enabled": self.follow_lock_when_enabled,
@@ -205,6 +222,8 @@ class UiState:
             "alert_enable_offline": self.alert_enable_offline,
             "alert_error_cooldown_sec": self.alert_error_cooldown_sec,
             "alert_error_escalate_count": self.alert_error_escalate_count,
+            "alert_restore_history_on_start": self.alert_restore_history_on_start,
+            "alert_history_retention_days": self.alert_history_retention_days,
             "alert_error_threshold": self.alert_error_threshold,
             "alert_use_type_threshold": self.alert_use_type_threshold,
             "alert_error_threshold_uav": self.alert_error_threshold_uav,
