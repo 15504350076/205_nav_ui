@@ -18,9 +18,9 @@ from ros_topic_mapping import RosTopicConvention
 DEFAULT_MOCK_ROS_IDS = ["UAV1", "UAV2", "UGV1"]
 
 
-def _parse_platform_ids(raw: str) -> list[str]:
+def _parse_platform_ids(raw: str, default_ids: list[str]) -> list[str]:
     ids = [item.strip() for item in raw.split(",") if item.strip()]
-    return ids or list(DEFAULT_MOCK_ROS_IDS)
+    return ids or list(default_ids)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -57,7 +57,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--ros2-platform-id",
         default="UAV1",
-        help="ros2 模式订阅的平台ID（最小闭环默认单平台）",
+        help="ros2 模式默认平台ID（兼容单平台参数）",
+    )
+    parser.add_argument(
+        "--ros2-platform-ids",
+        default=None,
+        help="ros2 模式平台ID列表，逗号分隔；填写后优先于 --ros2-platform-id",
     )
     parser.add_argument(
         "--ros2-node-name",
@@ -96,12 +101,17 @@ def build_data_source_from_args(args: argparse.Namespace):
 
     if args.source == "mock_ros":
         return MockRosLiveAdapter(
-            platform_ids=_parse_platform_ids(args.mock_ros_ids),
+            platform_ids=_parse_platform_ids(args.mock_ros_ids, DEFAULT_MOCK_ROS_IDS),
             interval_sec=max(0.02, float(args.mock_ros_interval)),
             seed=int(args.mock_ros_seed),
         )
 
     if args.source == "ros2":
+        ros2_platform_ids = (
+            _parse_platform_ids(args.ros2_platform_ids, [str(args.ros2_platform_id)])
+            if args.ros2_platform_ids is not None
+            else [str(args.ros2_platform_id)]
+        )
         default_convention = RosTopicConvention()
         topic_convention = RosTopicConvention(
             pose_topic=args.ros2_pose_topic or default_convention.pose_topic,
@@ -109,7 +119,7 @@ def build_data_source_from_args(args: argparse.Namespace):
             health_topic=args.ros2_health_topic or default_convention.health_topic,
         )
         ros_client = RclpyRos2Client(
-            platform_id=str(args.ros2_platform_id),
+            platform_ids=ros2_platform_ids,
             topic_convention=topic_convention,
             node_name=str(args.ros2_node_name),
         )
@@ -118,7 +128,7 @@ def build_data_source_from_args(args: argparse.Namespace):
                 f"{ros_client.get_status_message()}。可先使用 --source mock_ros 继续联调。"
             )
         return RosBridgeAdapter(
-            source_name=f"ROS2Bridge(Live:{args.ros2_platform_id})",
+            source_name=f"ROS2Bridge(Live:{','.join(ros2_platform_ids)})",
             topic_convention=topic_convention,
             ros_client=ros_client,
         )

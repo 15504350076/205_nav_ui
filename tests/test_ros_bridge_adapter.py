@@ -105,3 +105,15 @@ def test_ros_bridge_adapter_with_unavailable_client() -> None:
     status = adapter.get_status()
     assert status.connected is False
     assert "unavailable" in status.message
+
+
+def test_ros_bridge_adapter_accepts_payload_platform_id_when_topic_custom() -> None:
+    adapter = RosBridgeAdapter()
+    assert adapter.connect()
+    assert adapter.on_pose_topic(
+        "/custom/nav_pose",
+        {"platform_id": "UAVX", "x": 1.0, "y": 2.0, "z": 3.0, "timestamp": 1.0},
+    )
+    updates = adapter.poll()
+    assert len(updates) == 1
+    assert updates[0].id == "UAVX"

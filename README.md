@@ -2,7 +2,7 @@
 
 PySide6 原型界面，用于无人机（UAV）与无人车（UGV）协同导航定位显示。
 
-当前阶段在保持 GUI 与状态管理稳定迭代的同时，已打通 ROS2 最小接入闭环（单平台 pose/truth/health）。
+当前阶段在保持 GUI 与状态管理稳定迭代的同时，已打通 ROS2 最小接入闭环（pose/truth/health），并支持按平台列表订阅。
 
 ## 0. 当前阶段说明
 
@@ -176,6 +176,9 @@ python3 app.py --source replay --replay-file exports/recordings/xxx.jsonl
 
 # 最小真实 ROS2 接入（单平台）
 python3 app.py --source ros2 --ros2-platform-id UAV1
+
+# 真实 ROS2 多平台接入（静态平台列表）
+python3 app.py --source ros2 --ros2-platform-ids UAV1,UAV2,UGV1
 ```
 
 ### 4.1 ROS2 最小接入约定（单平台闭环）
@@ -207,8 +210,11 @@ python3 app.py --source ros2 --ros2-platform-id UAV1
 使用方式：
 
 ```bash
-# 终端1：启动 UI
+# 终端1：启动 UI（单平台）
 python3 app.py --source ros2 --ros2-platform-id UAV1
+
+# 终端1 也可直接订阅多平台
+python3 app.py --source ros2 --ros2-platform-ids UAV1,UAV2,UGV1
 
 # 终端2：启动最小topic发布（默认 UAV1）
 ./scripts/ros2_demo_publishers.sh UAV1
@@ -287,7 +293,7 @@ CI（GitHub Actions）：
 
 - P0：完成 ROS2 最小闭环实测（单平台 pose/truth/health）
 - P0：沉淀 ros2 运行脚本与联调文档（topic 发布示例、故障排查）
-- P1：扩展多平台订阅（平台发现、动态上下线）
+- P1：完善多平台订阅（平台动态发现、动态上下线）
 - P1：补齐 ROS2 message 适配（速度、协方差、状态码）
 - P1：增加 ros2 回放一致性测试（与 JSONL 回放对比）
 - P2：完善地图交互自动化测试与性能压测

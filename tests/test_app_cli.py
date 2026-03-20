@@ -20,6 +20,12 @@ def test_parse_cli_args_default_source() -> None:
     assert args.replay_file is None
 
 
+def test_parse_cli_args_ros2_platform_ids() -> None:
+    args = parse_cli_args(["--source", "ros2", "--ros2-platform-ids", "UAV1,UGV1"])
+    assert args.source == "ros2"
+    assert args.ros2_platform_ids == "UAV1,UGV1"
+
+
 def test_parse_cli_args_replay_requires_file() -> None:
     with pytest.raises(SystemExit):
         parse_cli_args(["--source", "replay"])
@@ -84,6 +90,7 @@ def test_build_data_source_ros2_unavailable(monkeypatch: pytest.MonkeyPatch) -> 
         mock_ros_interval=0.1,
         mock_ros_seed=205,
         ros2_platform_id="UAV1",
+        ros2_platform_ids=None,
         ros2_node_name="nav_ui_bridge",
         ros2_pose_topic=None,
         ros2_truth_topic=None,
@@ -94,9 +101,11 @@ def test_build_data_source_ros2_unavailable(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_build_data_source_ros2_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
     class AvailableClient:
-        def __init__(self, **_: object) -> None:
-            pass
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
 
         def is_available(self) -> bool:
             return True
@@ -121,6 +130,7 @@ def test_build_data_source_ros2_available(monkeypatch: pytest.MonkeyPatch) -> No
         mock_ros_interval=0.1,
         mock_ros_seed=205,
         ros2_platform_id="UAV9",
+        ros2_platform_ids="UAV9,UGV9",
         ros2_node_name="nav_ui_bridge",
         ros2_pose_topic="/swarm/{platform_id}/nav/pose",
         ros2_truth_topic="/swarm/{platform_id}/truth/pose",
@@ -128,3 +138,4 @@ def test_build_data_source_ros2_available(monkeypatch: pytest.MonkeyPatch) -> No
     )
     source = build_data_source_from_args(args)
     assert isinstance(source, RosBridgeAdapter)
+    assert captured["platform_ids"] == ["UAV9", "UGV9"]

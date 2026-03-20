@@ -97,19 +97,22 @@ class InMemoryRos2Client(RosIngressClient):
 
 
 class RclpyRos2Client(RosIngressClient):
-    """最小真实 ROS2 客户端：单平台 pose/truth/health 订阅闭环。"""
+    """最小真实 ROS2 客户端：支持单/多平台 pose/truth/health 订阅闭环。"""
 
     def __init__(
         self,
         *,
-        platform_id: str,
+        platform_id: str | None = None,
+        platform_ids: list[str] | tuple[str, ...] | None = None,
         topic_convention: RosTopicConvention | None = None,
         node_name: str = "nav_ui_bridge",
         qos_depth: int = 10,
         clock: Callable[[], float] | None = None,
         runtime_loader: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
-        self.platform_id = platform_id
+        resolved_platform_ids = self._resolve_platform_ids(platform_id, platform_ids)
+        self.platform_ids = tuple(resolved_platform_ids)
+        self.platform_id = self.platform_ids[0]
         self.topic_convention = topic_convention or RosTopicConvention()
         self.node_name = node_name
         self.qos_depth = max(1, int(qos_depth))
@@ -140,27 +143,38 @@ class RclpyRos2Client(RosIngressClient):
         if not rclpy.ok():
             rclpy.init(args=None)
         self._node = rclpy.create_node(self.node_name)
-        bindings = topic_bindings_for_platform(self.platform_id, convention=self.topic_convention)
-        self._subscriptions = [
-            self._node.create_subscription(
-                pose_msg_type,
-                bindings.pose_topic,
-                lambda msg, topic=bindings.pose_topic: self._on_pose(topic, msg),
-                self.qos_depth,
-            ),
-            self._node.create_subscription(
-                pose_msg_type,
-                bindings.truth_topic,
-                lambda msg, topic=bindings.truth_topic: self._on_truth(topic, msg),
-                self.qos_depth,
-            ),
-            self._node.create_subscription(
-                health_msg_type,
-                bindings.health_topic,
-                lambda msg, topic=bindings.health_topic: self._on_health(topic, msg),
-                self.qos_depth,
-            ),
-        ]
+        subscriptions: list[Any] = []
+        for platform_id in self.platform_ids:
+            bindings = topic_bindings_for_platform(platform_id, convention=self.topic_convention)
+            subscriptions.extend(
+                [
+                    self._node.create_subscription(
+                        pose_msg_type,
+                        bindings.pose_topic,
+                        lambda msg, topic=bindings.pose_topic, pid=platform_id: self._on_pose(
+                            pid, topic, msg
+                        ),
+                        self.qos_depth,
+                    ),
+                    self._node.create_subscription(
+                        pose_msg_type,
+                        bindings.truth_topic,
+                        lambda msg, topic=bindings.truth_topic, pid=platform_id: self._on_truth(
+                            pid, topic, msg
+                        ),
+                        self.qos_depth,
+                    ),
+                    self._node.create_subscription(
+                        health_msg_type,
+                        bindings.health_topic,
+                        lambda msg, topic=bindings.health_topic, pid=platform_id: self._on_health(
+                            pid, topic, msg
+                        ),
+                        self.qos_depth,
+                    ),
+                ]
+            )
+        self._subscriptions = subscriptions
         self._connected = True
         return True
 
@@ -189,32 +203,54 @@ class RclpyRos2Client(RosIngressClient):
     def get_status_message(self) -> str:
         if self._runtime_error:
             return f"ROS2 runtime unavailable: {self._runtime_error}"
+        target = ",".join(self.platform_ids)
         if self._connected:
-            return f"subscribed pose/truth/health for {self.platform_id}"
-        return f"ROS2 runtime ready for {self.platform_id}"
+            return f"subscribed pose/truth/health for [{target}]"
+        return f"ROS2 runtime ready for [{target}]"
 
-    def _on_pose(self, topic: str, message: Any) -> None:
+    def _on_pose(self, platform_id: str, topic: str, message: Any) -> None:
         payload = payload_from_ros_pose_message(
             message,
             default_timestamp=self._clock(),
-            platform_type="UAV" if self.platform_id.upper().startswith("UAV") else "UGV",
+            platform_type="UAV" if platform_id.upper().startswith("UAV") else "UGV",
             nav_state="TRACKING",
         )
+        payload["platform_id"] = platform_id
         self._queue.append(RosInboundMessage(kind="pose", topic=topic, payload=payload))
 
-    def _on_truth(self, topic: str, message: Any) -> None:
+    def _on_truth(self, platform_id: str, topic: str, message: Any) -> None:
         payload = payload_from_ros_pose_message(
             message,
             default_timestamp=self._clock(),
         )
+        payload["platform_id"] = platform_id
         self._queue.append(RosInboundMessage(kind="truth", topic=topic, payload=payload))
 
-    def _on_health(self, topic: str, message: Any) -> None:
+    def _on_health(self, platform_id: str, topic: str, message: Any) -> None:
         payload = payload_from_ros_health_message(
             message,
             default_timestamp=self._clock(),
         )
+        payload["platform_id"] = platform_id
         self._queue.append(RosInboundMessage(kind="health", topic=topic, payload=payload))
+
+    @staticmethod
+    def _resolve_platform_ids(
+        platform_id: str | None,
+        platform_ids: list[str] | tuple[str, ...] | None,
+    ) -> list[str]:
+        candidates = list(platform_ids) if platform_ids else []
+        if platform_id:
+            candidates.insert(0, platform_id)
+        normalized: list[str] = []
+        for item in candidates:
+            pid = str(item).strip()
+            if not pid or pid in normalized:
+                continue
+            normalized.append(pid)
+        if not normalized:
+            normalized.append("UAV1")
+        return normalized
 
 
 def _load_ros2_runtime() -> dict[str, Any]:

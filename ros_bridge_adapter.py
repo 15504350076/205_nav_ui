@@ -110,7 +110,7 @@ class RosBridgeAdapter(DataAdapter):
 
     # -------- ROS-style topic callbacks / mapping --------
     def on_pose_topic(self, topic: str, payload: dict) -> bool:
-        platform_id = self._platform_id_from_topic(topic)
+        platform_id = self._platform_id_from_topic(topic, payload=payload)
         if platform_id is None:
             return False
         current = self._platform_states.get(platform_id, self._new_state(platform_id))
@@ -120,7 +120,7 @@ class RosBridgeAdapter(DataAdapter):
         return True
 
     def on_truth_topic(self, topic: str, payload: dict) -> bool:
-        platform_id = self._platform_id_from_topic(topic)
+        platform_id = self._platform_id_from_topic(topic, payload=payload)
         if platform_id is None:
             return False
         current = self._platform_states.get(platform_id, self._new_state(platform_id))
@@ -130,7 +130,7 @@ class RosBridgeAdapter(DataAdapter):
         return True
 
     def on_health_topic(self, topic: str, payload: dict) -> bool:
-        platform_id = self._platform_id_from_topic(topic)
+        platform_id = self._platform_id_from_topic(topic, payload=payload)
         if platform_id is None:
             return False
         current = self._platform_states.get(platform_id, self._new_state(platform_id))
@@ -165,10 +165,16 @@ class RosBridgeAdapter(DataAdapter):
         self._mock_enabled = False
 
     # -------- Helpers --------
-    def _platform_id_from_topic(self, topic: str) -> str | None:
+    def _platform_id_from_topic(self, topic: str, *, payload: dict | None = None) -> str | None:
         match = _TOPIC_PLATFORM_ID_PATTERN.search(topic)
         if match is None:
-            return None
+            if payload is None:
+                return None
+            raw_platform_id = payload.get("platform_id")
+            if raw_platform_id is None:
+                return None
+            platform_id = str(raw_platform_id).strip()
+            return platform_id or None
         return match.group(1)
 
     def _new_state(self, platform_id: str) -> PlatformState:
