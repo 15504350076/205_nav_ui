@@ -95,8 +95,14 @@ PySide6 原型界面，用于无人机（UAV）与无人车（UGV）协同导航
   - 兼容层：对外重导出 `PlatformState`
 - `data_source.py`
   - `PlatformDataSource` / `ReplayCapableDataSource` 协议（实时/回放统一接口）
+- `data_adapter.py`
+  - 统一适配器接口（`connect/disconnect/poll/next_frame/is_live/get_status`）
+- `live_data_source.py`
+  - 实时源适配器（将 `PlatformDataSource` 接入统一适配器接口）
 - `replay_data_source.py`
   - 录制与回放数据源封装（实时源包装、JSONL读写、回放游标控制）
+- `ros_bridge_adapter.py`
+  - ROS2 桥接适配器骨架（当前 mock 壳实现）
 - `alert_event.py`
   - 统一告警事件模型（运行态与历史快照共用）
 - `platform_manager.py`
@@ -172,10 +178,12 @@ python3 -m pytest -q
 - `tests/test_alert_center.py`
 - `tests/test_alert_event.py`
 - `tests/test_alert_runtime.py`
+- `tests/test_live_data_source.py`
 - `tests/test_main_window_alerts.py`
 - `tests/test_main_window_integration.py`
 - `tests/test_platform_state.py`
 - `tests/test_replay_data_source.py`
+- `tests/test_ros_bridge_adapter.py`
 
 CI（GitHub Actions）：
 

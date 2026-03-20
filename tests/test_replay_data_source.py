@@ -10,9 +10,7 @@ class SequenceDataSource:
         self.index = 0
 
     def get_initial_data(self) -> list[PlatformState]:
-        if not self.frames:
-            return []
-        return list(self.frames[0])
+        return []
 
     def get_next_frame(self) -> list[PlatformState]:
         if self.index >= len(self.frames):
@@ -91,3 +89,13 @@ def test_replay_data_source_rejects_invalid_replay_file(tmp_path: Path) -> None:
 
     replay = ReplayDataSource(SequenceDataSource([]))
     assert not replay.load_replay_jsonl(path)
+
+
+def test_replay_data_source_status_and_lifecycle() -> None:
+    replay = ReplayDataSource(SequenceDataSource([]))
+    status = replay.get_status()
+    assert status.mode in {"live", "disconnected"}
+    assert replay.is_live() is True
+    replay.disconnect()
+    assert replay.get_status().connected is False
+    assert replay.connect() is True

@@ -3,23 +3,35 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from data_source import PlatformDataSource, ReplayCapableDataSource
+from data_adapter import AdapterStatus, DataAdapter, ReplayDataAdapter
+from data_source import PlatformDataSource
+from live_data_source import LiveDataSourceAdapter
 from platform_state import PlatformState
 
 
-class ReplayDataSource(ReplayCapableDataSource):
+class ReplayDataSource(ReplayDataAdapter):
     """在实时数据源之上叠加录制与回放能力。"""
 
-    def __init__(self, live_source: PlatformDataSource) -> None:
-        self.live_source = live_source
+    def __init__(self, live_source: PlatformDataSource | DataAdapter) -> None:
+        if isinstance(live_source, LiveDataSourceAdapter):
+            self.live_adapter: DataAdapter = live_source
+        elif all(
+            hasattr(live_source, attr)
+            for attr in ("connect", "disconnect", "poll", "next_frame", "get_status")
+        ):
+            self.live_adapter = live_source
+        else:
+            self.live_adapter = LiveDataSourceAdapter(live_source)
         self._recording = False
         self._recorded_frames: list[list[PlatformState]] = []
         self._replay_frames: list[list[PlatformState]] = []
         self._replay_index = 0
         self._replay_file_path: Path | None = None
+        self.live_adapter.connect()
+        self.live_adapter.poll()
 
     def __getattr__(self, name: str):
-        return getattr(self.live_source, name)
+        return getattr(self.live_adapter, name)
 
     @property
     def is_recording(self) -> bool:
@@ -52,10 +64,15 @@ class ReplayDataSource(ReplayCapableDataSource):
     def recorded_frame_count(self) -> int:
         return len(self._recorded_frames)
 
-    def get_initial_data(self) -> list[PlatformState]:
-        return self.live_source.get_initial_data()
+    def connect(self) -> bool:
+        return self.live_adapter.connect()
 
-    def get_next_frame(self) -> list[PlatformState]:
+    def disconnect(self) -> None:
+        self._recording = False
+        self.exit_replay_mode()
+        self.live_adapter.disconnect()
+
+    def poll(self) -> list[PlatformState]:
         if self.is_replay_mode:
             if self._replay_index >= len(self._replay_frames):
                 return []
@@ -63,10 +80,34 @@ class ReplayDataSource(ReplayCapableDataSource):
             self._replay_index += 1
             return frame
 
-        frame = self.live_source.get_next_frame()
-        if self._recording:
+        frame = self.live_adapter.poll()
+        if self._recording and frame:
             self._recorded_frames.append(list(frame))
         return frame
+
+    def next_frame(self) -> list[PlatformState]:
+        return self.poll()
+
+    def is_live(self) -> bool:
+        return not self.is_replay_mode
+
+    def get_status(self) -> AdapterStatus:
+        if self.is_replay_mode:
+            replay_name = self._replay_file_path.name if self._replay_file_path else "replay"
+            return AdapterStatus(
+                connected=True,
+                mode="replay",
+                source_name=replay_name,
+                message=f"frame {self._replay_index}/{len(self._replay_frames)}",
+            )
+        return self.live_adapter.get_status()
+
+    # Backward-compatible aliases
+    def get_initial_data(self) -> list[PlatformState]:
+        return self.poll()
+
+    def get_next_frame(self) -> list[PlatformState]:
+        return self.next_frame()
 
     def start_recording(self) -> bool:
         if self.is_replay_mode:
@@ -113,6 +154,8 @@ class ReplayDataSource(ReplayCapableDataSource):
                         state = PlatformState.from_dict(item)
                         if state is not None:
                             frame_states.append(state)
+                    if not frame_states:
+                        continue
                     loaded_frames.append(frame_states)
         except (OSError, json.JSONDecodeError):
             return False

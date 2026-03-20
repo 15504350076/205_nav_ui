@@ -36,7 +36,9 @@ from PySide6.QtWidgets import (
 
 from fake_data import FakeDataGenerator
 from map_view import MapView
-from data_source import PlatformDataSource, ReplayCapableDataSource
+from data_adapter import ReplayDataAdapter
+from data_source import PlatformDataSource
+from live_data_source import LiveDataSourceAdapter
 from replay_data_source import ReplayDataSource
 from error_plot_widget import ErrorPlotWidget
 from platform_state import PlatformState
@@ -90,7 +92,8 @@ class MainWindow(QMainWindow):
         self.resize(1200, 700)
 
         live_source = data_source if data_source is not None else FakeDataGenerator()
-        self.data_source: ReplayCapableDataSource = ReplayDataSource(live_source)
+        live_adapter = LiveDataSourceAdapter(live_source)
+        self.data_source: ReplayDataAdapter = ReplayDataSource(live_adapter)
         self.platform_manager = PlatformManager(stale_timeout_sec=0.6, remove_timeout_sec=3.0)
 
         self.id_label = QLabel("--")
@@ -1000,7 +1003,10 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.main_splitter)
 
     def _load_initial_data(self) -> None:
-        initial_data = self.data_source.get_initial_data()
+        if not self.data_source.connect():
+            self.status_bar.showMessage("数据源连接失败")
+            return
+        initial_data = self.data_source.poll()
         removed_ids = self.platform_manager.apply_updates(initial_data)
         if removed_ids:
             self.map_view.remove_platforms(removed_ids)
@@ -1012,13 +1018,16 @@ class MainWindow(QMainWindow):
         self._raise_runtime_alerts(all_platforms, stale_ids, removed_ids)
         self.refresh_alert_threshold_preview_table()
         self.map_view.fit_all_platforms()
+        status = self.data_source.get_status()
+        if status.connected:
+            self.status_bar.showMessage(f"数据源已连接: {status.source_name} ({status.mode})")
 
     def on_timer_update(self) -> None:
         if self.data_source.is_replay_mode:
             self._advance_replay_frame(status_prefix="回放")
             return
 
-        platform_data = self.data_source.get_next_frame()
+        platform_data = self.data_source.next_frame()
         self._apply_frame_update(platform_data)
 
     def _apply_frame_update(self, platform_data: list[PlatformState], status_prefix: str = "") -> None:
@@ -1110,7 +1119,7 @@ class MainWindow(QMainWindow):
         if self.data_source.is_replay_mode:
             self._advance_replay_frame(status_prefix="回放单步")
             return
-        platform_data = self.data_source.get_next_frame()
+        platform_data = self.data_source.next_frame()
         self._apply_frame_update(platform_data, status_prefix="单步刷新完成")
 
     def on_follow_toggled(self, enabled: bool) -> None:
@@ -1881,7 +1890,7 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("回放结束")
             return False
 
-        frame = self.data_source.get_next_frame()
+        frame = self.data_source.next_frame()
         self._apply_frame_update(
             frame,
             status_prefix=f"{status_prefix} {current_index + 1}/{total}",
@@ -2955,6 +2964,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         self._save_ui_state()
         self._persist_alert_history_snapshot()
+        self.data_source.disconnect()
         super().closeEvent(event)
 
     def show_about(self) -> None:
