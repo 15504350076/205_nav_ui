@@ -101,3 +101,87 @@ def test_rclpy_client_multi_platform_subscriptions_and_poll() -> None:
     assert ids == ["UAV1", "UGV1"]
     client.disconnect()
     assert fake_rclpy.node.destroyed is True
+
+
+def test_rclpy_client_auto_discovers_new_platform_topics() -> None:
+    class FakePoseStamped:
+        class Header:
+            class Stamp:
+                sec = 2
+                nanosec = 0
+
+            stamp = Stamp()
+
+        class Pose:
+            class Position:
+                x = 1.0
+                y = 2.0
+                z = 3.0
+
+            position = Position()
+
+        header = Header()
+        pose = Pose()
+
+    class FakeString:
+        data = '{"is_online": true, "link_state": "OK", "nav_state": "TRACKING"}'
+
+    class FakeNode:
+        def __init__(self) -> None:
+            self.subscriptions: list[tuple[str, object]] = []
+
+        def create_subscription(self, msg_type, topic: str, callback, qos_depth: int):
+            del msg_type, qos_depth
+            self.subscriptions.append((topic, callback))
+            return topic
+
+        def get_topic_names_and_types(self):
+            return [
+                ("/swarm/UGV2/nav/pose", ["geometry_msgs/msg/PoseStamped"]),
+                ("/swarm/UGV2/truth/pose", ["geometry_msgs/msg/PoseStamped"]),
+                ("/swarm/UGV2/health", ["std_msgs/msg/String"]),
+            ]
+
+        def destroy_node(self) -> None:
+            return None
+
+    class FakeRclpy:
+        def __init__(self) -> None:
+            self.inited = False
+            self.node = FakeNode()
+
+        def ok(self) -> bool:
+            return self.inited
+
+        def init(self, args=None) -> None:
+            del args
+            self.inited = True
+
+        def create_node(self, node_name: str) -> FakeNode:
+            del node_name
+            return self.node
+
+        def spin_once(self, node: FakeNode, timeout_sec: float) -> None:
+            del timeout_sec
+            for topic, callback in node.subscriptions:
+                if topic.endswith("/health"):
+                    callback(FakeString())
+                else:
+                    callback(FakePoseStamped())
+
+    fake_rclpy = FakeRclpy()
+
+    def runtime_loader():
+        return {"rclpy": fake_rclpy, "PoseStamped": object(), "String": object()}
+
+    client = RclpyRos2Client(
+        platform_ids=["UAV1"],
+        auto_discovery=True,
+        runtime_loader=runtime_loader,
+    )
+    assert client.connect()
+    topics = [topic for topic, _ in fake_rclpy.node.subscriptions]
+    assert "/swarm/UGV2/nav/pose" in topics
+    events = client.poll()
+    discovered_ids = {event.payload.get("platform_id") for event in events}
+    assert "UGV2" in discovered_ids

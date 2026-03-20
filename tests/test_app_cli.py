@@ -24,6 +24,12 @@ def test_parse_cli_args_ros2_platform_ids() -> None:
     args = parse_cli_args(["--source", "ros2", "--ros2-platform-ids", "UAV1,UGV1"])
     assert args.source == "ros2"
     assert args.ros2_platform_ids == "UAV1,UGV1"
+    assert args.ros2_auto_discovery is True
+
+
+def test_parse_cli_args_ros2_disable_auto_discovery() -> None:
+    args = parse_cli_args(["--source", "ros2", "--ros2-no-auto-discovery"])
+    assert args.ros2_auto_discovery is False
 
 
 def test_parse_cli_args_replay_requires_file() -> None:
@@ -92,6 +98,8 @@ def test_build_data_source_ros2_unavailable(monkeypatch: pytest.MonkeyPatch) -> 
         ros2_platform_id="UAV1",
         ros2_platform_ids=None,
         ros2_node_name="nav_ui_bridge",
+        ros2_auto_discovery=True,
+        ros2_discovery_interval=1.0,
         ros2_pose_topic=None,
         ros2_truth_topic=None,
         ros2_health_topic=None,
@@ -132,6 +140,8 @@ def test_build_data_source_ros2_available(monkeypatch: pytest.MonkeyPatch) -> No
         ros2_platform_id="UAV9",
         ros2_platform_ids="UAV9,UGV9",
         ros2_node_name="nav_ui_bridge",
+        ros2_auto_discovery=True,
+        ros2_discovery_interval=1.0,
         ros2_pose_topic="/swarm/{platform_id}/nav/pose",
         ros2_truth_topic="/swarm/{platform_id}/truth/pose",
         ros2_health_topic="/swarm/{platform_id}/health",
@@ -139,3 +149,5 @@ def test_build_data_source_ros2_available(monkeypatch: pytest.MonkeyPatch) -> No
     source = build_data_source_from_args(args)
     assert isinstance(source, RosBridgeAdapter)
     assert captured["platform_ids"] == ["UAV9", "UGV9"]
+    assert captured["auto_discovery"] is True
+    assert captured["discovery_interval_sec"] == 1.0

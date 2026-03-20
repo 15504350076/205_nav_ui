@@ -174,14 +174,19 @@ python3 app.py --source mock_ros --mock-ros-ids UAV1,UAV2,UGV1 --mock-ros-interv
 # 从 JSONL 录制文件直接回放
 python3 app.py --source replay --replay-file exports/recordings/xxx.jsonl
 
-# 最小真实 ROS2 接入（单平台）
-python3 app.py --source ros2 --ros2-platform-id UAV1
+# 真实 ROS2 接入（默认开启自动平台发现）
+python3 app.py --source ros2
 
 # 真实 ROS2 多平台接入（静态平台列表）
 python3 app.py --source ros2 --ros2-platform-ids UAV1,UAV2,UGV1
+
+# 关闭自动发现，仅按手工列表订阅
+python3 app.py --source ros2 --ros2-platform-ids UAV1,UGV1 --ros2-no-auto-discovery
 ```
 
 ### 4.1 ROS2 最小接入约定（单平台闭环）
+
+默认开启自动平台发现，不再强制手填 `--ros2-platform-ids`。
 
 最小 topic（默认）：
 
@@ -210,8 +215,8 @@ python3 app.py --source ros2 --ros2-platform-ids UAV1,UAV2,UGV1
 使用方式：
 
 ```bash
-# 终端1：启动 UI（单平台）
-python3 app.py --source ros2 --ros2-platform-id UAV1
+# 终端1：启动 UI（自动发现）
+python3 app.py --source ros2
 
 # 终端1 也可直接订阅多平台
 python3 app.py --source ros2 --ros2-platform-ids UAV1,UAV2,UGV1
@@ -293,7 +298,7 @@ CI（GitHub Actions）：
 
 - P0：完成 ROS2 最小闭环实测（单平台 pose/truth/health）
 - P0：沉淀 ros2 运行脚本与联调文档（topic 发布示例、故障排查）
-- P1：完善多平台订阅（平台动态发现、动态上下线）
+- P1：完善多平台订阅（动态上下线策略与异常恢复）
 - P1：补齐 ROS2 message 适配（速度、协方差、状态码）
 - P1：增加 ros2 回放一致性测试（与 JSONL 回放对比）
 - P2：完善地图交互自动化测试与性能压测

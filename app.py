@@ -70,6 +70,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="ros2 模式节点名",
     )
     parser.add_argument(
+        "--ros2-auto-discovery",
+        action="store_true",
+        default=True,
+        help="启用 ROS2 topic 自动发现（默认开启）",
+    )
+    parser.add_argument(
+        "--ros2-no-auto-discovery",
+        dest="ros2_auto_discovery",
+        action="store_false",
+        help="关闭 ROS2 topic 自动发现，仅订阅显式平台列表",
+    )
+    parser.add_argument(
+        "--ros2-discovery-interval",
+        type=float,
+        default=1.0,
+        help="自动发现扫描周期（秒），默认 1.0",
+    )
+    parser.add_argument(
         "--ros2-pose-topic",
         default=None,
         help="ros2 估计位姿 topic（可选覆盖，支持模板或固定值）",
@@ -122,6 +140,8 @@ def build_data_source_from_args(args: argparse.Namespace):
             platform_ids=ros2_platform_ids,
             topic_convention=topic_convention,
             node_name=str(args.ros2_node_name),
+            auto_discovery=bool(args.ros2_auto_discovery),
+            discovery_interval_sec=float(args.ros2_discovery_interval),
         )
         if not ros_client.is_available():
             raise ValueError(

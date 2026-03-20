@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+import re
 import time
 from typing import Any, Callable, Literal, Protocol
 
@@ -107,6 +108,8 @@ class RclpyRos2Client(RosIngressClient):
         topic_convention: RosTopicConvention | None = None,
         node_name: str = "nav_ui_bridge",
         qos_depth: int = 10,
+        auto_discovery: bool = True,
+        discovery_interval_sec: float = 1.0,
         clock: Callable[[], float] | None = None,
         runtime_loader: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
@@ -116,12 +119,22 @@ class RclpyRos2Client(RosIngressClient):
         self.topic_convention = topic_convention or RosTopicConvention()
         self.node_name = node_name
         self.qos_depth = max(1, int(qos_depth))
+        self.auto_discovery = auto_discovery
+        self.discovery_interval_sec = max(0.2, float(discovery_interval_sec))
         self._clock = clock or time.time
         self._queue: deque[RosInboundMessage] = deque()
         self._connected = False
         self._node: Any = None
         self._subscriptions: list[Any] = []
+        self._subscription_keys: set[tuple[str, RosInboundKind]] = set()
+        self._subscribed_platform_ids: set[str] = set()
+        self._last_discovery_ts = 0.0
         self._runtime_error: str | None = None
+        self._topic_patterns = {
+            "pose": self._template_to_topic_regex(self.topic_convention.pose_topic),
+            "truth": self._template_to_topic_regex(self.topic_convention.truth_topic),
+            "health": self._template_to_topic_regex(self.topic_convention.health_topic),
+        }
 
         self._runtime_loader = runtime_loader or _load_ros2_runtime
         self._runtime: dict[str, Any] | None = None
@@ -143,38 +156,16 @@ class RclpyRos2Client(RosIngressClient):
         if not rclpy.ok():
             rclpy.init(args=None)
         self._node = rclpy.create_node(self.node_name)
-        subscriptions: list[Any] = []
+        self._subscriptions = []
+        self._subscription_keys.clear()
+        self._subscribed_platform_ids.clear()
         for platform_id in self.platform_ids:
-            bindings = topic_bindings_for_platform(platform_id, convention=self.topic_convention)
-            subscriptions.extend(
-                [
-                    self._node.create_subscription(
-                        pose_msg_type,
-                        bindings.pose_topic,
-                        lambda msg, topic=bindings.pose_topic, pid=platform_id: self._on_pose(
-                            pid, topic, msg
-                        ),
-                        self.qos_depth,
-                    ),
-                    self._node.create_subscription(
-                        pose_msg_type,
-                        bindings.truth_topic,
-                        lambda msg, topic=bindings.truth_topic, pid=platform_id: self._on_truth(
-                            pid, topic, msg
-                        ),
-                        self.qos_depth,
-                    ),
-                    self._node.create_subscription(
-                        health_msg_type,
-                        bindings.health_topic,
-                        lambda msg, topic=bindings.health_topic, pid=platform_id: self._on_health(
-                            pid, topic, msg
-                        ),
-                        self.qos_depth,
-                    ),
-                ]
+            self._bind_platform_channels(
+                platform_id,
+                pose_msg_type=pose_msg_type,
+                health_msg_type=health_msg_type,
             )
-        self._subscriptions = subscriptions
+        self._refresh_discovered_subscriptions(force=True)
         self._connected = True
         return True
 
@@ -183,6 +174,8 @@ class RclpyRos2Client(RosIngressClient):
             self._node.destroy_node()
         self._node = None
         self._subscriptions = []
+        self._subscription_keys.clear()
+        self._subscribed_platform_ids.clear()
         self._queue.clear()
         self._connected = False
 
@@ -190,6 +183,7 @@ class RclpyRos2Client(RosIngressClient):
         if not self._connected or self._runtime is None or self._node is None:
             return []
         rclpy = self._runtime["rclpy"]
+        self._refresh_discovered_subscriptions(force=False)
         rclpy.spin_once(self._node, timeout_sec=0.0)
         if not self._queue:
             return []
@@ -203,10 +197,12 @@ class RclpyRos2Client(RosIngressClient):
     def get_status_message(self) -> str:
         if self._runtime_error:
             return f"ROS2 runtime unavailable: {self._runtime_error}"
-        target = ",".join(self.platform_ids)
+        target_ids = sorted(self._subscribed_platform_ids or set(self.platform_ids))
+        target = ",".join(target_ids) if target_ids else "-"
+        discovery_suffix = " + auto-discovery" if self.auto_discovery else ""
         if self._connected:
-            return f"subscribed pose/truth/health for [{target}]"
-        return f"ROS2 runtime ready for [{target}]"
+            return f"subscribed pose/truth/health for [{target}]{discovery_suffix}"
+        return f"ROS2 runtime ready for [{target}]{discovery_suffix}"
 
     def _on_pose(self, platform_id: str, topic: str, message: Any) -> None:
         payload = payload_from_ros_pose_message(
@@ -233,6 +229,149 @@ class RclpyRos2Client(RosIngressClient):
         )
         payload["platform_id"] = platform_id
         self._queue.append(RosInboundMessage(kind="health", topic=topic, payload=payload))
+
+    def _bind_platform_channels(
+        self,
+        platform_id: str,
+        *,
+        pose_msg_type: Any,
+        health_msg_type: Any,
+    ) -> None:
+        bindings = topic_bindings_for_platform(platform_id, convention=self.topic_convention)
+        self._bind_subscription(
+            platform_id=platform_id,
+            kind="pose",
+            topic=bindings.pose_topic,
+            msg_type=pose_msg_type,
+            callback=lambda msg, topic=bindings.pose_topic, pid=platform_id: self._on_pose(
+                pid, topic, msg
+            ),
+        )
+        self._bind_subscription(
+            platform_id=platform_id,
+            kind="truth",
+            topic=bindings.truth_topic,
+            msg_type=pose_msg_type,
+            callback=lambda msg, topic=bindings.truth_topic, pid=platform_id: self._on_truth(
+                pid, topic, msg
+            ),
+        )
+        self._bind_subscription(
+            platform_id=platform_id,
+            kind="health",
+            topic=bindings.health_topic,
+            msg_type=health_msg_type,
+            callback=lambda msg, topic=bindings.health_topic, pid=platform_id: self._on_health(
+                pid, topic, msg
+            ),
+        )
+
+    def _bind_subscription(
+        self,
+        *,
+        platform_id: str,
+        kind: RosInboundKind,
+        topic: str,
+        msg_type: Any,
+        callback: Callable[[Any], None],
+    ) -> None:
+        if self._node is None:
+            return
+        key = (platform_id, kind)
+        if key in self._subscription_keys:
+            return
+        subscription = self._node.create_subscription(
+            msg_type,
+            topic,
+            callback,
+            self.qos_depth,
+        )
+        self._subscriptions.append(subscription)
+        self._subscription_keys.add(key)
+        self._subscribed_platform_ids.add(platform_id)
+
+    def _refresh_discovered_subscriptions(self, *, force: bool) -> None:
+        if not self.auto_discovery or self._runtime is None or self._node is None:
+            return
+        now = self._clock()
+        if not force and now - self._last_discovery_ts < self.discovery_interval_sec:
+            return
+        self._last_discovery_ts = now
+
+        getter = getattr(self._node, "get_topic_names_and_types", None)
+        if getter is None:
+            return
+        try:
+            topic_rows = getter()
+        except Exception:
+            return
+
+        pose_msg_type = self._runtime["PoseStamped"]
+        health_msg_type = self._runtime["String"]
+
+        for row in topic_rows:
+            if not isinstance(row, (tuple, list)) or not row:
+                continue
+            topic = str(row[0])
+            match_result = self._match_discovery_topic(topic)
+            if match_result is None:
+                continue
+            kind, platform_id = match_result
+            if kind == "health":
+                callback = (
+                    lambda msg, t=topic, pid=platform_id: self._on_health(pid, t, msg)
+                )
+                self._bind_subscription(
+                    platform_id=platform_id,
+                    kind=kind,
+                    topic=topic,
+                    msg_type=health_msg_type,
+                    callback=callback,
+                )
+            elif kind == "pose":
+                callback = (
+                    lambda msg, t=topic, pid=platform_id: self._on_pose(pid, t, msg)
+                )
+                self._bind_subscription(
+                    platform_id=platform_id,
+                    kind=kind,
+                    topic=topic,
+                    msg_type=pose_msg_type,
+                    callback=callback,
+                )
+            else:
+                callback = (
+                    lambda msg, t=topic, pid=platform_id: self._on_truth(pid, t, msg)
+                )
+                self._bind_subscription(
+                    platform_id=platform_id,
+                    kind=kind,
+                    topic=topic,
+                    msg_type=pose_msg_type,
+                    callback=callback,
+                )
+
+    def _match_discovery_topic(self, topic: str) -> tuple[RosInboundKind, str] | None:
+        for kind in ("pose", "truth", "health"):
+            pattern = self._topic_patterns[kind]
+            if pattern is None:
+                continue
+            matched = pattern.match(topic)
+            if matched is None:
+                continue
+            platform_id = matched.group("platform_id").strip()
+            if not platform_id:
+                continue
+            return kind, platform_id
+        return None
+
+    @staticmethod
+    def _template_to_topic_regex(template: str) -> re.Pattern[str] | None:
+        marker = "{platform_id}"
+        if marker not in template:
+            return None
+        escaped = re.escape(template).replace(re.escape(marker), r"(?P<platform_id>[^/]+)")
+        return re.compile(rf"^{escaped}$")
 
     @staticmethod
     def _resolve_platform_ids(
