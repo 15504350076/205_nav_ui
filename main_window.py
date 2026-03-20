@@ -1,4 +1,5 @@
 import json
+import math
 from datetime import datetime
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
+    QFileDialog,
     QFrame,
     QFormLayout,
     QGroupBox,
@@ -63,6 +65,15 @@ class MainWindow(QMainWindow):
         self.platform_row_by_id: dict[str, int] = {}
         self._syncing_table_selection = False
         self.pinned_export_paths: set[str] = set()
+        self.is_recording = False
+        self.recorded_frames: list[list[dict]] = []
+        self.is_replay_mode = False
+        self.replay_frames: list[list[PlatformState]] = []
+        self.replay_frame_index = 0
+        self.replay_file_path: Path | None = None
+        self.alert_max_rows = 400
+        self.last_stale_platform_ids: set[str] = set()
+        self.last_error_alert_timestamp_by_id: dict[str, float] = {}
         self.base_timer_interval_ms = 100
         self.playback_speed = 1.0
         self.packet_loss_controls_supported = all(
@@ -238,6 +249,8 @@ class MainWindow(QMainWindow):
         help_layout.addWidget(QLabel("23. 导出索引支持关键字搜索与路径复制"))
         help_layout.addWidget(QLabel("24. 支持导出文件置顶与排序"))
         help_layout.addWidget(QLabel("25. 支持多选导出文件批量打开与清理"))
+        help_layout.addWidget(QLabel("26. 支持录制实时数据并加载文件回放"))
+        help_layout.addWidget(QLabel("27. 支持告警中心与告警确认/清理"))
 
         export_index_group = QGroupBox("导出索引")
         export_index_layout = QVBoxLayout(export_index_group)
@@ -386,6 +399,75 @@ class MainWindow(QMainWindow):
         export_error_plot_button.clicked.connect(self.on_export_error_plot)
         button_layout.addWidget(export_error_plot_button)
 
+        replay_group = QGroupBox("录制与回放")
+        replay_layout = QVBoxLayout(replay_group)
+        self.replay_status_label = QLabel("模式: 实时")
+        replay_layout.addWidget(self.replay_status_label)
+
+        start_record_button = QPushButton("开始录制")
+        start_record_button.clicked.connect(self.on_start_recording)
+        replay_layout.addWidget(start_record_button)
+
+        stop_record_button = QPushButton("停止并保存录制")
+        stop_record_button.clicked.connect(self.on_stop_recording_and_save)
+        replay_layout.addWidget(stop_record_button)
+
+        load_replay_button = QPushButton("加载回放文件")
+        load_replay_button.clicked.connect(self.on_load_replay_file)
+        replay_layout.addWidget(load_replay_button)
+
+        replay_prev_button = QPushButton("回放上一帧")
+        replay_prev_button.clicked.connect(self.on_replay_prev_frame)
+        replay_layout.addWidget(replay_prev_button)
+
+        replay_next_button = QPushButton("回放下一帧")
+        replay_next_button.clicked.connect(self.on_replay_next_frame)
+        replay_layout.addWidget(replay_next_button)
+
+        exit_replay_button = QPushButton("退出回放模式")
+        exit_replay_button.clicked.connect(self.on_exit_replay_mode)
+        replay_layout.addWidget(exit_replay_button)
+
+        alert_group = QGroupBox("告警中心")
+        alert_layout = QVBoxLayout(alert_group)
+        alert_threshold_row = QHBoxLayout()
+        alert_threshold_row.addWidget(QLabel("误差阈值(m)"))
+        self.alert_error_threshold_spin = QDoubleSpinBox()
+        self.alert_error_threshold_spin.setDecimals(1)
+        self.alert_error_threshold_spin.setRange(0.1, 50.0)
+        self.alert_error_threshold_spin.setSingleStep(0.5)
+        self.alert_error_threshold_spin.setValue(4.0)
+        alert_threshold_row.addWidget(self.alert_error_threshold_spin)
+        alert_layout.addLayout(alert_threshold_row)
+
+        self.alert_table = QTableWidget(0, 5)
+        self.alert_table.setHorizontalHeaderLabels(["时间", "级别", "来源", "内容", "状态"])
+        self.alert_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.alert_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.alert_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.alert_table.setAlternatingRowColors(True)
+        self.alert_table.verticalHeader().setVisible(False)
+        self.alert_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.alert_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.alert_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.alert_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        self.alert_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        alert_layout.addWidget(self.alert_table)
+
+        alert_button_row = QHBoxLayout()
+        ack_alert_button = QPushButton("确认选中")
+        ack_alert_button.clicked.connect(self.on_ack_selected_alerts)
+        alert_button_row.addWidget(ack_alert_button)
+
+        clear_acked_button = QPushButton("清空已确认")
+        clear_acked_button.clicked.connect(self.on_clear_acknowledged_alerts)
+        alert_button_row.addWidget(clear_acked_button)
+
+        clear_all_alert_button = QPushButton("清空全部")
+        clear_all_alert_button.clicked.connect(self.on_clear_all_alerts)
+        alert_button_row.addWidget(clear_all_alert_button)
+        alert_layout.addLayout(alert_button_row)
+
         self.right_tabs = QTabWidget()
         self.right_tabs.setDocumentMode(True)
 
@@ -411,6 +493,7 @@ class MainWindow(QMainWindow):
         control_layout = QVBoxLayout(control_tab)
         control_layout.setContentsMargins(6, 6, 6, 6)
         control_layout.addWidget(button_group)
+        control_layout.addWidget(replay_group)
         control_layout.addStretch()
         self.right_tabs.addTab(control_tab, "控制")
 
@@ -428,6 +511,13 @@ class MainWindow(QMainWindow):
         help_tab_layout.addStretch()
         self.right_tabs.addTab(help_tab, "说明")
 
+        alert_tab = QWidget()
+        alert_tab_layout = QVBoxLayout(alert_tab)
+        alert_tab_layout.setContentsMargins(6, 6, 6, 6)
+        alert_tab_layout.addWidget(alert_group)
+        alert_tab_layout.addStretch()
+        self.right_tabs.addTab(alert_tab, "告警")
+
         right_scroll.setWidget(self.right_tabs)
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.main_splitter.setHandleWidth(8)
@@ -444,13 +534,22 @@ class MainWindow(QMainWindow):
         removed_ids = self.platform_manager.apply_updates(initial_data)
         if removed_ids:
             self.map_view.remove_platforms(removed_ids)
-        self.map_view.update_platforms(self.platform_manager.get_all_platforms())
-        self.map_view.set_stale_platforms(self.platform_manager.get_stale_platform_ids())
-        self.update_platform_table(self.platform_manager.get_all_platforms())
+        all_platforms = self.platform_manager.get_all_platforms()
+        stale_ids = self.platform_manager.get_stale_platform_ids()
+        self.map_view.update_platforms(all_platforms)
+        self.map_view.set_stale_platforms(stale_ids)
+        self.update_platform_table(all_platforms)
+        self._raise_runtime_alerts(all_platforms, stale_ids, removed_ids)
         self.map_view.fit_all_platforms()
 
     def on_timer_update(self) -> None:
+        if self.is_replay_mode:
+            self._advance_replay_frame(status_prefix="回放")
+            return
+
         platform_data = self.data_source.get_next_frame()
+        if self.is_recording:
+            self.recorded_frames.append([state.to_dict() for state in platform_data])
         self._apply_frame_update(platform_data)
 
     def _apply_frame_update(self, platform_data: list[PlatformState], status_prefix: str = "") -> None:
@@ -535,7 +634,12 @@ class MainWindow(QMainWindow):
         if self.timer.isActive():
             self.status_bar.showMessage("当前为自动刷新模式，请先暂停后再单步刷新")
             return
+        if self.is_replay_mode:
+            self._advance_replay_frame(status_prefix="回放单步")
+            return
         platform_data = self.data_source.get_next_frame()
+        if self.is_recording:
+            self.recorded_frames.append([state.to_dict() for state in platform_data])
         self._apply_frame_update(platform_data, status_prefix="单步刷新完成")
 
     def on_follow_toggled(self, enabled: bool) -> None:
@@ -610,6 +714,9 @@ class MainWindow(QMainWindow):
 
     def resume_updates(self) -> None:
         self.timer.start(self._current_timer_interval_ms())
+        if self.is_replay_mode:
+            self.status_bar.showMessage("已恢复自动回放")
+            return
         selected_info = self.map_view.get_selected_platform_info()
         if selected_info is not None:
             self.on_platform_selected(selected_info, status_prefix="已恢复自动刷新")
@@ -676,6 +783,280 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage(f"误差曲线图已导出: {file_path}")
         else:
             self.status_bar.showMessage("误差曲线图导出失败")
+
+    def on_start_recording(self) -> None:
+        if self.is_replay_mode:
+            self.status_bar.showMessage("回放模式下不能开始录制")
+            return
+        self.recorded_frames = []
+        self.is_recording = True
+        self.replay_status_label.setText("模式: 实时录制中")
+        self.status_bar.showMessage("已开始录制实时数据")
+
+    def on_stop_recording_and_save(self) -> None:
+        if not self.is_recording:
+            self.status_bar.showMessage("当前未处于录制状态")
+            return
+        self.is_recording = False
+        if not self.recorded_frames:
+            self.replay_status_label.setText("模式: 实时")
+            self.status_bar.showMessage("录制为空，未生成文件")
+            return
+
+        record_dir = Path.cwd() / "exports" / "recordings"
+        record_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        file_path = record_dir / f"replay_{timestamp}.jsonl"
+        try:
+            with file_path.open("w", encoding="utf-8") as file:
+                for frame in self.recorded_frames:
+                    file.write(json.dumps(frame, ensure_ascii=False))
+                    file.write("\n")
+        except OSError:
+            self.status_bar.showMessage("录制保存失败")
+            return
+
+        self.replay_status_label.setText("模式: 实时")
+        self.refresh_export_index(focus_path=file_path)
+        self.status_bar.showMessage(
+            f"录制完成并保存: {file_path} | 帧数: {len(self.recorded_frames)}"
+        )
+
+    def on_load_replay_file(self) -> None:
+        record_dir = Path.cwd() / "exports" / "recordings"
+        record_dir.mkdir(parents=True, exist_ok=True)
+        file_path_str, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择回放文件",
+            str(record_dir),
+            "Replay Files (*.jsonl);;All Files (*)",
+        )
+        if not file_path_str:
+            return
+
+        file_path = Path(file_path_str)
+        loaded_frames: list[list[PlatformState]] = []
+        try:
+            with file_path.open("r", encoding="utf-8") as file:
+                for line in file:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    raw_frame = json.loads(line)
+                    if not isinstance(raw_frame, list):
+                        continue
+                    frame_states: list[PlatformState] = []
+                    for item in raw_frame:
+                        state = self._state_from_dict(item)
+                        if state is not None:
+                            frame_states.append(state)
+                    loaded_frames.append(frame_states)
+        except (OSError, json.JSONDecodeError):
+            self.status_bar.showMessage("回放文件读取失败")
+            return
+
+        if not loaded_frames:
+            self.status_bar.showMessage("回放文件为空或格式无效")
+            return
+
+        self.is_recording = False
+        self.is_replay_mode = True
+        self.replay_frames = loaded_frames
+        self.replay_frame_index = 0
+        self.replay_file_path = file_path
+        self.replay_status_label.setText(
+            f"模式: 回放 {self.replay_frame_index}/{len(self.replay_frames)}"
+        )
+        self._reset_platform_runtime()
+        self._advance_replay_frame(status_prefix="回放加载")
+        self.status_bar.showMessage(f"已加载回放文件: {file_path}")
+
+    def on_exit_replay_mode(self) -> None:
+        if not self.is_replay_mode:
+            self.status_bar.showMessage("当前不在回放模式")
+            return
+        self.is_replay_mode = False
+        self.replay_frames = []
+        self.replay_frame_index = 0
+        self.replay_file_path = None
+        self.replay_status_label.setText("模式: 实时")
+        self._reset_platform_runtime()
+        self._load_initial_data()
+        self.status_bar.showMessage("已退出回放模式并恢复实时数据")
+
+    def on_replay_prev_frame(self) -> None:
+        if not self.is_replay_mode:
+            self.status_bar.showMessage("当前不在回放模式")
+            return
+        if self.replay_frame_index <= 1:
+            self.status_bar.showMessage("已经是回放首帧")
+            return
+        self.replay_frame_index -= 2
+        self._advance_replay_frame(status_prefix="回放回退")
+
+    def on_replay_next_frame(self) -> None:
+        if not self.is_replay_mode:
+            self.status_bar.showMessage("当前不在回放模式")
+            return
+        if self.timer.isActive():
+            self.status_bar.showMessage("当前为自动回放，请先暂停再单步")
+            return
+        self._advance_replay_frame(status_prefix="回放单步")
+
+    def _advance_replay_frame(self, status_prefix: str = "回放") -> bool:
+        if not self.replay_frames:
+            return False
+        if self.replay_frame_index >= len(self.replay_frames):
+            if self.timer.isActive():
+                self.timer.stop()
+            self.status_bar.showMessage("回放结束")
+            return False
+
+        frame = self.replay_frames[self.replay_frame_index]
+        self._apply_frame_update(
+            frame,
+            status_prefix=f"{status_prefix} {self.replay_frame_index + 1}/{len(self.replay_frames)}",
+        )
+        self.replay_frame_index += 1
+        self.replay_status_label.setText(
+            f"模式: 回放 {self.replay_frame_index}/{len(self.replay_frames)}"
+        )
+        return True
+
+    def _state_from_dict(self, raw_item: dict) -> PlatformState | None:
+        if not isinstance(raw_item, dict):
+            return None
+        try:
+            return PlatformState(
+                id=str(raw_item["id"]),
+                type=str(raw_item["type"]),
+                x=float(raw_item["x"]),
+                y=float(raw_item["y"]),
+                z=float(raw_item["z"]),
+                vx=float(raw_item.get("vx", 0.0)),
+                vy=float(raw_item.get("vy", 0.0)),
+                vz=float(raw_item.get("vz", 0.0)),
+                speed=float(raw_item.get("speed", 0.0)),
+                timestamp=float(raw_item.get("timestamp", 0.0)),
+                is_online=bool(raw_item.get("is_online", True)),
+                truth_x=(
+                    float(raw_item["truth_x"])
+                    if raw_item.get("truth_x") is not None
+                    else None
+                ),
+                truth_y=(
+                    float(raw_item["truth_y"])
+                    if raw_item.get("truth_y") is not None
+                    else None
+                ),
+                truth_z=(
+                    float(raw_item["truth_z"])
+                    if raw_item.get("truth_z") is not None
+                    else None
+                ),
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def _reset_platform_runtime(self) -> None:
+        existing_ids = [state.id for state in self.map_view.get_all_platform_infos()]
+        if existing_ids:
+            self.map_view.remove_platforms(existing_ids)
+        self.platform_manager = PlatformManager(
+            stale_timeout_sec=self.stale_timeout_spin.value(),
+            remove_timeout_sec=self.remove_timeout_spin.value(),
+        )
+        self.platform_row_by_id.clear()
+        self.platform_table.setRowCount(0)
+        self.platform_table.clearSelection()
+        self.clear_selected_platform_info()
+        self.map_view.set_stale_platforms(set())
+        self.last_stale_platform_ids = set()
+        self.last_error_alert_timestamp_by_id.clear()
+
+    def _raise_runtime_alerts(
+        self,
+        all_platforms: list[PlatformState],
+        stale_ids: set[str],
+        removed_ids: list[str],
+    ) -> None:
+        newly_stale = stale_ids - self.last_stale_platform_ids
+        recovered = self.last_stale_platform_ids - stale_ids
+
+        for platform_id in sorted(newly_stale):
+            self._append_alert("WARN", platform_id, "平台状态超时")
+        for platform_id in sorted(recovered):
+            self._append_alert("INFO", platform_id, "平台恢复正常")
+        for platform_id in removed_ids:
+            self._append_alert("ERROR", platform_id, "平台超时下线并已移除")
+
+        error_threshold = self.alert_error_threshold_spin.value()
+        for state in all_platforms:
+            if state.truth_x is None or state.truth_y is None:
+                continue
+            planar_error = math.hypot(state.x - state.truth_x, state.y - state.truth_y)
+            if planar_error <= error_threshold:
+                continue
+            last_alert_ts = self.last_error_alert_timestamp_by_id.get(state.id, -1e9)
+            if state.timestamp - last_alert_ts < 1.5:
+                continue
+            self.last_error_alert_timestamp_by_id[state.id] = state.timestamp
+            self._append_alert(
+                "WARN",
+                state.id,
+                f"平面误差超阈值: {planar_error:.2f} m (> {error_threshold:.2f} m)",
+            )
+
+        self.last_stale_platform_ids = set(stale_ids)
+
+    def _append_alert(self, level: str, source: str, message: str) -> None:
+        row = self.alert_table.rowCount()
+        self.alert_table.insertRow(row)
+        now_text = datetime.now().strftime("%H:%M:%S")
+        self.alert_table.setItem(row, 0, QTableWidgetItem(now_text))
+        self.alert_table.setItem(row, 1, QTableWidgetItem(level))
+        self.alert_table.setItem(row, 2, QTableWidgetItem(source))
+        self.alert_table.setItem(row, 3, QTableWidgetItem(message))
+        status_item = QTableWidgetItem("未确认")
+        self.alert_table.setItem(row, 4, status_item)
+
+        if level == "ERROR":
+            color = QColor(255, 120, 120)
+        elif level == "WARN":
+            color = QColor(255, 200, 120)
+        else:
+            color = QColor(180, 220, 255)
+        for col in range(self.alert_table.columnCount()):
+            item = self.alert_table.item(row, col)
+            if item is not None:
+                item.setForeground(QBrush(color))
+
+        while self.alert_table.rowCount() > self.alert_max_rows:
+            self.alert_table.removeRow(0)
+
+    def on_ack_selected_alerts(self) -> None:
+        selected_rows = self.alert_table.selectionModel().selectedRows()
+        if not selected_rows:
+            self.status_bar.showMessage("未选中告警")
+            return
+        for model_index in selected_rows:
+            status_item = self.alert_table.item(model_index.row(), 4)
+            if status_item is not None:
+                status_item.setText("已确认")
+        self.status_bar.showMessage(f"已确认 {len(selected_rows)} 条告警")
+
+    def on_clear_acknowledged_alerts(self) -> None:
+        removed = 0
+        for row in range(self.alert_table.rowCount() - 1, -1, -1):
+            status_item = self.alert_table.item(row, 4)
+            if status_item is not None and status_item.text() == "已确认":
+                self.alert_table.removeRow(row)
+                removed += 1
+        self.status_bar.showMessage(f"已清空 {removed} 条已确认告警")
+
+    def on_clear_all_alerts(self) -> None:
+        self.alert_table.setRowCount(0)
+        self.status_bar.showMessage("已清空全部告警")
 
     def refresh_export_index(
         self,
@@ -1091,7 +1472,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "关于",
-            "205_nav_ui 原型（第二十六步）\n\n"
+            "205_nav_ui 原型（第二十七步）\n\n"
             "当前功能：\n"
             "- UAV/UGV 不同图形显示\n"
             "- 平台状态统一dataclass（含在线与真值预留字段）\n"
@@ -1103,6 +1484,9 @@ class MainWindow(QMainWindow):
             "- 导出索引面板（筛选 + 搜索 + 排序 + 置顶）\n"
             "- 一键复制选中导出文件路径\n"
             "- 多选导出文件批量打开与批量清理\n"
+            "- 实时数据录制与文件回放\n"
+            "- 告警中心（超时/下线/误差超阈）\n"
+            "- 告警确认与清理\n"
             "- 平台列表联动选中与定位\n"
             "- 数据新鲜度告警（超时灰显）\n"
             "- 下线平台自动移除（图元/轨迹/列表）\n"
