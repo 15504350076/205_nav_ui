@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -13,6 +14,15 @@ class RosTopicConvention:
     pose_topic: str = "/swarm/{platform_id}/nav/pose"
     truth_topic: str = "/swarm/{platform_id}/truth/pose"
     health_topic: str = "/swarm/{platform_id}/health"
+
+
+@dataclass(slots=True, frozen=True)
+class RosTopicPayloadContract:
+    """最小 ROS2 接入字段约定（用于文档与适配器约束）。"""
+
+    pose_fields: tuple[str, ...] = ("x", "y", "z", "timestamp")
+    truth_fields: tuple[str, ...] = ("x", "y", "z", "timestamp")
+    health_fields: tuple[str, ...] = ("is_online", "link_state", "nav_state", "timestamp")
 
 
 @dataclass(slots=True, frozen=True)
@@ -48,6 +58,96 @@ def _as_str(value: Any, default: str | None = None) -> str | None:
     if value is None:
         return default
     return str(value)
+
+
+def _read_nested_attr(raw: Any, path: tuple[str, ...], default: Any = None) -> Any:
+    current = raw
+    for name in path:
+        if current is None:
+            return default
+        current = getattr(current, name, None)
+    return current if current is not None else default
+
+
+def _stamp_to_seconds(stamp_like: Any, default: float) -> float:
+    if stamp_like is None:
+        return default
+    sec = getattr(stamp_like, "sec", None)
+    nanosec = getattr(stamp_like, "nanosec", None)
+    if sec is None:
+        return default
+    sec_float = _as_float(sec, default)
+    if nanosec is None:
+        return sec_float
+    return sec_float + _as_float(nanosec, 0.0) / 1e9
+
+
+def payload_from_ros_pose_message(
+    message: Any,
+    *,
+    default_timestamp: float = 0.0,
+    platform_type: str | None = None,
+    nav_state: str | None = None,
+) -> dict[str, Any]:
+    """将 PoseStamped 形态消息规范化为内部 pose payload."""
+
+    x = _as_float(_read_nested_attr(message, ("pose", "position", "x"), None), 0.0)
+    y = _as_float(_read_nested_attr(message, ("pose", "position", "y"), None), 0.0)
+    z = _as_float(_read_nested_attr(message, ("pose", "position", "z"), None), 0.0)
+    stamp_like = _read_nested_attr(message, ("header", "stamp"), None)
+    timestamp = _stamp_to_seconds(stamp_like, default_timestamp)
+    payload: dict[str, Any] = {
+        "x": x,
+        "y": y,
+        "z": z,
+        "timestamp": timestamp,
+    }
+    if platform_type:
+        payload["type"] = platform_type
+    if nav_state:
+        payload["nav_state"] = nav_state
+    return payload
+
+
+def payload_from_ros_health_message(
+    message: Any,
+    *,
+    default_timestamp: float = 0.0,
+) -> dict[str, Any]:
+    """将 health topic 消息规范化为内部 health payload.
+
+    兼容两种输入：
+    1) `std_msgs/String`：`data` 为 JSON 字符串。
+    2) 纯字符串：如 `OK` / `LOST`。
+    """
+
+    raw_text = getattr(message, "data", message)
+    if isinstance(raw_text, str):
+        text = raw_text.strip()
+        if text:
+            try:
+                raw_json = json.loads(text)
+            except json.JSONDecodeError:
+                normalized = text.upper()
+                return {
+                    "is_online": normalized not in {"LOST", "OFFLINE", "DISCONNECTED"},
+                    "link_state": text,
+                    "nav_state": None,
+                    "timestamp": default_timestamp,
+                }
+            if isinstance(raw_json, dict):
+                return {
+                    "is_online": bool(raw_json.get("is_online", True)),
+                    "link_state": _as_str(raw_json.get("link_state"), "OK"),
+                    "nav_state": _as_str(raw_json.get("nav_state"), None),
+                    "timestamp": _as_float(raw_json.get("timestamp"), default_timestamp),
+                }
+    return {
+        "is_online": True,
+        "link_state": "UNKNOWN",
+        "nav_state": None,
+        "timestamp": default_timestamp,
+    }
 
 
 def apply_pose_payload(

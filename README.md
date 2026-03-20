@@ -2,7 +2,13 @@
 
 PySide6 原型界面，用于无人机（UAV）与无人车（UGV）协同导航定位显示。
 
-当前阶段目标是先把 GUI 原型和状态管理打磨好，使用假数据驱动，不接 ROS2/真实传感器。
+当前阶段在保持 GUI 与状态管理稳定迭代的同时，已打通 ROS2 最小接入闭环（单平台 pose/truth/health）。
+
+## 0. 当前阶段说明
+
+- 项目已从“原型 UI”进入“可持续迭代架构”阶段
+- 当前优先级从“新增 UI 小功能”转向“验证真实 ROS2 最小接入闭环”
+- 接入策略保持不变：ROS2 逻辑走适配器层，UI 层保持无感知
 
 ## 1. 项目定位
 
@@ -103,6 +109,8 @@ PySide6 原型界面，用于无人机（UAV）与无人车（UGV）协同导航
   - 录制与回放数据源封装（实时源包装、JSONL读写、回放游标控制）
 - `ros_bridge_adapter.py`
   - ROS2 桥接适配器骨架与 mock 实时适配器
+- `ros2_client.py`
+  - 真实 ROS2 入站客户端（`rclpy`）与 stub/in-memory 客户端
 - `ros_topic_mapping.py`
   - 约定 ROS topic 到 `PlatformState` 字段映射（pose/truth/health）
 - `alert_event.py`
@@ -137,6 +145,16 @@ PySide6 原型界面，用于无人机（UAV）与无人车（UGV）协同导航
 - 数据源可插拔：后续接 ROS2 时可替换 `FakeDataGenerator`
 - 数据结构统一：UI 与业务共享 `PlatformState`
 
+### 3.3 核心数据流
+
+- `fake/replay/mock_ros/ros2` 数据源 -> `DataAdapter`
+- `DataAdapter` 输出统一 `PlatformState`
+- `PlatformManager` 维护在线/超时/移除状态
+- `EvaluationService` 计算误差与 RMS
+- `RuntimeAlertEngine` 触发运行态告警
+- `MapView + MainWindow` 完成可视化与交互编排
+- `AlertHistoryService / export` 负责历史与导出
+
 ## 4. 快速启动
 
 ```bash
@@ -155,6 +173,29 @@ python3 app.py --source mock_ros --mock-ros-ids UAV1,UAV2,UGV1 --mock-ros-interv
 
 # 从 JSONL 录制文件直接回放
 python3 app.py --source replay --replay-file exports/recordings/xxx.jsonl
+
+# 最小真实 ROS2 接入（单平台）
+python3 app.py --source ros2 --ros2-platform-id UAV1
+```
+
+### 4.1 ROS2 最小接入约定（单平台闭环）
+
+最小 topic（默认）：
+
+- 估计位姿：`/swarm/{platform_id}/nav/pose`（建议 `geometry_msgs/PoseStamped`）
+- 真值位姿：`/swarm/{platform_id}/truth/pose`（建议 `geometry_msgs/PoseStamped`）
+- 健康状态：`/swarm/{platform_id}/health`（建议 `std_msgs/String`，JSON 字符串）
+
+内部字段映射：
+
+- `pose topic` -> `PlatformState.x/y/z/timestamp`（可带 `type/nav_state`）
+- `truth topic` -> `PlatformState.truth_x/truth_y/truth_z/timestamp`
+- `health topic` -> `PlatformState.is_online/link_state/nav_state/timestamp`
+
+健康状态字符串示例（JSON）：
+
+```json
+{"is_online": true, "link_state": "OK", "nav_state": "TRACKING", "timestamp": 1710000000.1}
 ```
 
 如果遇到 Qt `xcb` 插件相关错误（例如缺 `libxcb-cursor0`），可安装：
@@ -201,6 +242,8 @@ python3 -m pytest -q
 - `tests/test_main_window_integration.py`
 - `tests/test_platform_state.py`
 - `tests/test_replay_data_source.py`
+- `tests/test_app_cli.py`
+- `tests/test_ros2_client.py`
 - `tests/test_ros_bridge_adapter.py`
 - `tests/test_ros_topic_mapping.py`
 
@@ -212,8 +255,17 @@ CI（GitHub Actions）：
 
 ## 6. 后续建议
 
-- 增加 `PlatformDataSource` 的 ROS2 适配实现（保持 UI 层无感知）
+- 完善真实 ROS2 适配器（多平台/更多 topic，保持 UI 层无感知）
 - 增加日志回放数据源（JSONL/CSV）
 - 增加导出索引按目录分组与统计
 - 增加告警规则配置（按平台/级别自定义阈值）
 - 扩展测试：`MapView` 交互与主窗口联动
+
+## 7. 后续开发路线图
+
+- P0：完成 ROS2 最小闭环实测（单平台 pose/truth/health）
+- P0：沉淀 ros2 运行脚本与联调文档（topic 发布示例、故障排查）
+- P1：扩展多平台订阅（平台发现、动态上下线）
+- P1：补齐 ROS2 message 适配（速度、协方差、状态码）
+- P1：增加 ros2 回放一致性测试（与 JSONL 回放对比）
+- P2：完善地图交互自动化测试与性能压测

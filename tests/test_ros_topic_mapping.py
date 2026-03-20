@@ -4,6 +4,8 @@ from ros_topic_mapping import (
     apply_health_payload,
     apply_pose_payload,
     apply_truth_payload,
+    payload_from_ros_health_message,
+    payload_from_ros_pose_message,
     topic_bindings_for_platform,
 )
 
@@ -55,3 +57,40 @@ def test_apply_pose_truth_health_payloads() -> None:
     assert state.is_online is False
     assert state.link_state == "LOST"
     assert state.nav_state == "DEGRADED"
+
+
+def test_payload_from_ros_pose_message() -> None:
+    class Stamp:
+        sec = 10
+        nanosec = 500_000_000
+
+    class Header:
+        stamp = Stamp()
+
+    class Position:
+        x = 1.0
+        y = 2.0
+        z = 3.0
+
+    class Pose:
+        position = Position()
+
+    class PoseStampedLike:
+        header = Header()
+        pose = Pose()
+
+    payload = payload_from_ros_pose_message(PoseStampedLike(), default_timestamp=0.0, platform_type="UAV")
+    assert payload["x"] == 1.0 and payload["y"] == 2.0 and payload["z"] == 3.0
+    assert payload["timestamp"] == 10.5
+    assert payload["type"] == "UAV"
+
+
+def test_payload_from_ros_health_message_with_json() -> None:
+    class StringLike:
+        data = '{"is_online": false, "link_state": "LOST", "nav_state": "DEGRADED", "timestamp": 9.0}'
+
+    payload = payload_from_ros_health_message(StringLike(), default_timestamp=1.0)
+    assert payload["is_online"] is False
+    assert payload["link_state"] == "LOST"
+    assert payload["nav_state"] == "DEGRADED"
+    assert payload["timestamp"] == 9.0

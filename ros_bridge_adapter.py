@@ -9,6 +9,7 @@ from typing import Callable
 
 from data_adapter import AdapterStatus, DataAdapter
 from platform_state import PlatformState
+from ros2_client import RosInboundMessage, RosIngressClient
 from ros_topic_mapping import (
     RosTopicConvention,
     apply_health_payload,
@@ -36,10 +37,12 @@ class RosBridgeAdapter(DataAdapter):
         source_name: str = "ROS2Bridge",
         topic_convention: RosTopicConvention | None = None,
         clock: Callable[[], float] | None = None,
+        ros_client: RosIngressClient | None = None,
     ) -> None:
         self.source_name = source_name
         self.topic_convention = topic_convention or RosTopicConvention()
         self._clock = clock or time.monotonic
+        self._ros_client = ros_client
         self._connected = False
         self._mock_enabled = False
         self._mock_interval_sec = 0.1
@@ -51,17 +54,25 @@ class RosBridgeAdapter(DataAdapter):
         self._mock_phase_by_id: dict[str, float] = {}
 
     def connect(self) -> bool:
-        self._connected = True
+        if self._ros_client is not None:
+            self._connected = self._ros_client.connect()
+        else:
+            self._connected = True
         self._last_emit_ts = self._clock()
-        return True
+        return self._connected
 
     def disconnect(self) -> None:
+        if self._ros_client is not None:
+            self._ros_client.disconnect()
         self._connected = False
         self._dirty_platform_ids.clear()
 
     def poll(self) -> list[PlatformState]:
         if not self._connected:
             return []
+        if self._ros_client is not None:
+            for message in self._ros_client.poll():
+                self._apply_ros_inbound_message(message)
         now = self._clock()
         if self._mock_enabled and now - self._last_emit_ts >= self._mock_interval_sec:
             self._last_emit_ts = now
@@ -76,7 +87,11 @@ class RosBridgeAdapter(DataAdapter):
 
     def get_status(self) -> AdapterStatus:
         mode = "live" if self._connected else "disconnected"
-        if self._mock_enabled:
+        if self._ros_client is not None:
+            message = self._ros_client.get_status_message()
+            if self._mock_enabled:
+                message = f"{message}; mock stream active"
+        elif self._mock_enabled:
             message = "mock stream active" if self._connected else "mock stream idle"
         else:
             message = "awaiting ROS2 subscriptions" if self._connected else "adapter idle"
@@ -86,6 +101,12 @@ class RosBridgeAdapter(DataAdapter):
             source_name=self.source_name,
             message=message,
         )
+
+    @property
+    def ros_runtime_available(self) -> bool:
+        if self._ros_client is None:
+            return True
+        return self._ros_client.is_available()
 
     # -------- ROS-style topic callbacks / mapping --------
     def on_pose_topic(self, topic: str, payload: dict) -> bool:
@@ -117,6 +138,16 @@ class RosBridgeAdapter(DataAdapter):
         self._platform_states[platform_id] = updated
         self._dirty_platform_ids.add(platform_id)
         return True
+
+    def _apply_ros_inbound_message(self, message: RosInboundMessage) -> None:
+        if message.kind == "pose":
+            self.on_pose_topic(message.topic, message.payload)
+            return
+        if message.kind == "truth":
+            self.on_truth_topic(message.topic, message.payload)
+            return
+        if message.kind == "health":
+            self.on_health_topic(message.topic, message.payload)
 
     # -------- Mock live stream controls --------
     def enable_mock_stream(self, config: MockStreamConfig) -> None:

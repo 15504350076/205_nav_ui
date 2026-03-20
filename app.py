@@ -10,7 +10,9 @@ from PySide6.QtWidgets import QApplication
 from fake_data import FakeDataGenerator
 from main_window import MainWindow
 from replay_data_source import ReplayDataSource
-from ros_bridge_adapter import MockRosLiveAdapter
+from ros2_client import RclpyRos2Client
+from ros_bridge_adapter import MockRosLiveAdapter, RosBridgeAdapter
+from ros_topic_mapping import RosTopicConvention
 
 
 DEFAULT_MOCK_ROS_IDS = ["UAV1", "UAV2", "UGV1"]
@@ -25,9 +27,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="205_nav_ui 启动入口")
     parser.add_argument(
         "--source",
-        choices=("fake", "replay", "mock_ros"),
+        choices=("fake", "replay", "mock_ros", "ros2"),
         default="fake",
-        help="数据源类型：fake（默认）/ replay（文件回放）/ mock_ros（ROS2 mock实时）",
+        help="数据源类型：fake（默认）/ replay（文件回放）/ mock_ros（ROS2 mock实时）/ ros2（真实ROS2）",
     )
     parser.add_argument(
         "--replay-file",
@@ -52,6 +54,31 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=205,
         help="mock_ros 随机种子，默认 205",
     )
+    parser.add_argument(
+        "--ros2-platform-id",
+        default="UAV1",
+        help="ros2 模式订阅的平台ID（最小闭环默认单平台）",
+    )
+    parser.add_argument(
+        "--ros2-node-name",
+        default="nav_ui_bridge",
+        help="ros2 模式节点名",
+    )
+    parser.add_argument(
+        "--ros2-pose-topic",
+        default=None,
+        help="ros2 估计位姿 topic（可选覆盖，支持模板或固定值）",
+    )
+    parser.add_argument(
+        "--ros2-truth-topic",
+        default=None,
+        help="ros2 真值位姿 topic（可选覆盖，支持模板或固定值）",
+    )
+    parser.add_argument(
+        "--ros2-health-topic",
+        default=None,
+        help="ros2 健康状态 topic（可选覆盖，支持模板或固定值）",
+    )
     return parser
 
 
@@ -72,6 +99,28 @@ def build_data_source_from_args(args: argparse.Namespace):
             platform_ids=_parse_platform_ids(args.mock_ros_ids),
             interval_sec=max(0.02, float(args.mock_ros_interval)),
             seed=int(args.mock_ros_seed),
+        )
+
+    if args.source == "ros2":
+        default_convention = RosTopicConvention()
+        topic_convention = RosTopicConvention(
+            pose_topic=args.ros2_pose_topic or default_convention.pose_topic,
+            truth_topic=args.ros2_truth_topic or default_convention.truth_topic,
+            health_topic=args.ros2_health_topic or default_convention.health_topic,
+        )
+        ros_client = RclpyRos2Client(
+            platform_id=str(args.ros2_platform_id),
+            topic_convention=topic_convention,
+            node_name=str(args.ros2_node_name),
+        )
+        if not ros_client.is_available():
+            raise ValueError(
+                f"{ros_client.get_status_message()}。可先使用 --source mock_ros 继续联调。"
+            )
+        return RosBridgeAdapter(
+            source_name=f"ROS2Bridge(Live:{args.ros2_platform_id})",
+            topic_convention=topic_convention,
+            ros_client=ros_client,
         )
 
     replay_path = Path(args.replay_file)
