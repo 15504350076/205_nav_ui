@@ -24,18 +24,22 @@ from PySide6.QtWidgets import (
 
 from fake_data import FakeDataGenerator
 from map_view import MapView
+from data_source import PlatformDataSource
+from models import PlatformState
+from platform_manager import PlatformManager
 
 
 class MainWindow(QMainWindow):
     """主窗口：中间地图，右侧信息栏。"""
 
-    def __init__(self) -> None:
+    def __init__(self, data_source: PlatformDataSource | None = None) -> None:
         super().__init__()
 
         self.setWindowTitle("205_nav_ui - PySide6 原型")
         self.resize(1200, 700)
 
-        self.data_generator = FakeDataGenerator()
+        self.data_source = data_source if data_source is not None else FakeDataGenerator()
+        self.platform_manager = PlatformManager(stale_timeout_sec=0.6, remove_timeout_sec=3.0)
 
         self.id_label = QLabel("--")
         self.type_label = QLabel("--")
@@ -48,6 +52,10 @@ class MainWindow(QMainWindow):
         self._syncing_table_selection = False
         self.base_timer_interval_ms = 100
         self.playback_speed = 1.0
+        self.packet_loss_controls_supported = all(
+            hasattr(self.data_source, name)
+            for name in ("set_packet_loss_enabled", "set_packet_loss_rate")
+        )
 
         self.map_view = MapView(on_platform_selected=self.on_platform_selected)
 
@@ -140,7 +148,7 @@ class MainWindow(QMainWindow):
         self.stale_timeout_spin.setRange(0.1, 30.0)
         self.stale_timeout_spin.setSingleStep(0.1)
         self.stale_timeout_spin.setSuffix(" s")
-        self.stale_timeout_spin.setValue(self.map_view.stale_timeout_sec)
+        self.stale_timeout_spin.setValue(self.platform_manager.stale_timeout_sec)
         self.stale_timeout_spin.valueChanged.connect(self.on_stale_timeout_changed)
         threshold_layout.addRow("超时告警阈值:", self.stale_timeout_spin)
 
@@ -149,7 +157,7 @@ class MainWindow(QMainWindow):
         self.remove_timeout_spin.setRange(self.stale_timeout_spin.value(), 60.0)
         self.remove_timeout_spin.setSingleStep(0.5)
         self.remove_timeout_spin.setSuffix(" s")
-        self.remove_timeout_spin.setValue(self.map_view.remove_timeout_sec)
+        self.remove_timeout_spin.setValue(self.platform_manager.remove_timeout_sec)
         self.remove_timeout_spin.valueChanged.connect(self.on_remove_timeout_changed)
         threshold_layout.addRow("下线移除阈值:", self.remove_timeout_spin)
 
@@ -158,6 +166,9 @@ class MainWindow(QMainWindow):
 
         self.packet_loss_checkbox = QCheckBox("启用掉帧仿真")
         self.packet_loss_checkbox.setChecked(False)
+        self.packet_loss_checkbox.setEnabled(self.packet_loss_controls_supported)
+        if not self.packet_loss_controls_supported:
+            self.packet_loss_checkbox.setToolTip("当前数据源不支持掉帧仿真控制")
         self.packet_loss_checkbox.toggled.connect(self.on_packet_loss_toggled)
         sim_layout.addRow(self.packet_loss_checkbox)
 
@@ -186,6 +197,7 @@ class MainWindow(QMainWindow):
         help_layout.addWidget(QLabel("11. 支持0.5x/1.0x/2.0x回放倍速"))
         help_layout.addWidget(QLabel("12. 支持全局视图/定位选中/复位视图"))
         help_layout.addWidget(QLabel("13. 支持链路掉帧仿真（用于告警联调）"))
+        help_layout.addWidget(QLabel("14. 平台状态统一为dataclass并集中管理"))
 
         button_group = QGroupBox("控制")
         button_layout = QVBoxLayout(button_group)
@@ -240,18 +252,26 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(right_scroll, 1)
 
     def _load_initial_data(self) -> None:
-        initial_data = self.data_generator.get_initial_data()
-        self.map_view.update_platforms(initial_data)
-        self.update_platform_table(self.map_view.get_all_platform_infos())
+        initial_data = self.data_source.get_initial_data()
+        removed_ids = self.platform_manager.apply_updates(initial_data)
+        if removed_ids:
+            self.map_view.remove_platforms(removed_ids)
+        self.map_view.update_platforms(self.platform_manager.get_all_platforms())
+        self.map_view.set_stale_platforms(self.platform_manager.get_stale_platform_ids())
+        self.update_platform_table(self.platform_manager.get_all_platforms())
         self.map_view.fit_all_platforms()
 
     def on_timer_update(self) -> None:
-        platform_data = self.data_generator.get_next_frame()
+        platform_data = self.data_source.get_next_frame()
         self._apply_frame_update(platform_data)
 
-    def _apply_frame_update(self, platform_data: list[dict], status_prefix: str = "") -> None:
-        removed_ids = self.map_view.update_platforms(platform_data)
-        self.update_platform_table(self.map_view.get_all_platform_infos())
+    def _apply_frame_update(self, platform_data: list[PlatformState], status_prefix: str = "") -> None:
+        removed_ids = self.platform_manager.apply_updates(platform_data)
+        if removed_ids:
+            self.map_view.remove_platforms(removed_ids)
+        self.map_view.update_platforms(self.platform_manager.get_all_platforms())
+        self.map_view.set_stale_platforms(self.platform_manager.get_stale_platform_ids())
+        self.update_platform_table(self.platform_manager.get_all_platforms())
 
         selected_info = self.map_view.get_selected_platform_info()
         if selected_info is not None:
@@ -262,7 +282,7 @@ class MainWindow(QMainWindow):
             self.clear_selected_platform_info()
             self.platform_table.clearSelection()
 
-        stale_count = len(self.map_view.get_stale_platform_ids())
+        stale_count = len(self.platform_manager.get_stale_platform_ids())
         removed_count = len(removed_ids)
         if stale_count > 0:
             message = (
@@ -276,24 +296,24 @@ class MainWindow(QMainWindow):
             message = f"{status_prefix} | {message}"
         self.status_bar.showMessage(message)
 
-    def on_platform_selected(self, platform_info: dict, status_prefix: str = "") -> None:
-        self.id_label.setText(str(platform_info["id"]))
-        self.type_label.setText(str(platform_info["type"]))
-        self.x_label.setText(f'{platform_info["x"]:.2f}')
-        self.y_label.setText(f'{platform_info["y"]:.2f}')
-        self.z_label.setText(f'{platform_info["z"]:.2f}')
-        self.speed_label.setText(f'{platform_info.get("speed", 0.0):.2f}')
-        self.timestamp_label.setText(f'{platform_info.get("timestamp", 0.0):.2f}')
+    def on_platform_selected(self, platform_info: PlatformState, status_prefix: str = "") -> None:
+        self.id_label.setText(str(platform_info.id))
+        self.type_label.setText(str(platform_info.type))
+        self.x_label.setText(f"{platform_info.x:.2f}")
+        self.y_label.setText(f"{platform_info.y:.2f}")
+        self.z_label.setText(f"{platform_info.z:.2f}")
+        self.speed_label.setText(f"{platform_info.speed:.2f}")
+        self.timestamp_label.setText(f"{platform_info.timestamp:.2f}")
 
-        selected_id = str(platform_info["id"])
-        stale_count = len(self.map_view.get_stale_platform_ids())
-        selected_stale = self.map_view.is_platform_stale(selected_id)
+        selected_id = str(platform_info.id)
+        stale_count = len(self.platform_manager.get_stale_platform_ids())
+        selected_stale = self.platform_manager.is_platform_stale(selected_id)
         selected_state_text = "超时" if selected_stale else "正常"
 
         message = (
             f'当前选中: {selected_id} | '
-            f'类型: {platform_info["type"]} | '
-            f'速度: {platform_info.get("speed", 0.0):.2f} | '
+            f'类型: {platform_info.type} | '
+            f'速度: {platform_info.speed:.2f} | '
             f'状态: {selected_state_text}'
         )
         if stale_count > 0:
@@ -301,7 +321,8 @@ class MainWindow(QMainWindow):
         if status_prefix:
             message = f"{status_prefix} | {message}"
         self.status_bar.showMessage(message)
-        self.sync_table_selection(platform_info["id"])
+        self.platform_manager.set_selected_platform(selected_id)
+        self.sync_table_selection(selected_id)
 
     def pause_updates(self) -> None:
         self.timer.stop()
@@ -311,7 +332,7 @@ class MainWindow(QMainWindow):
         if self.timer.isActive():
             self.status_bar.showMessage("当前为自动刷新模式，请先暂停后再单步刷新")
             return
-        platform_data = self.data_generator.get_next_frame()
+        platform_data = self.data_source.get_next_frame()
         self._apply_frame_update(platform_data, status_prefix="单步刷新完成")
 
     def on_follow_toggled(self, enabled: bool) -> None:
@@ -319,18 +340,28 @@ class MainWindow(QMainWindow):
         self.follow_lock_checkbox.setEnabled(enabled)
 
     def on_stale_timeout_changed(self, value: float) -> None:
-        self.map_view.set_stale_timeout(value)
+        self.platform_manager.set_stale_timeout(value)
+        self.map_view.set_stale_platforms(self.platform_manager.get_stale_platform_ids())
         self.remove_timeout_spin.setMinimum(value)
         if self.remove_timeout_spin.value() < value:
             self.remove_timeout_spin.setValue(value)
 
     def on_remove_timeout_changed(self, value: float) -> None:
-        self.map_view.set_remove_timeout(value)
+        removed_ids = self.platform_manager.set_remove_timeout(value)
+        if removed_ids:
+            self.map_view.remove_platforms(removed_ids)
+            self.clear_selected_platform_info()
+            self.platform_table.clearSelection()
+        self.map_view.set_stale_platforms(self.platform_manager.get_stale_platform_ids())
+        self.update_platform_table(self.platform_manager.get_all_platforms())
 
     def on_packet_loss_toggled(self, enabled: bool) -> None:
-        self.data_generator.set_packet_loss_enabled(enabled)
+        if not self.packet_loss_controls_supported:
+            self.status_bar.showMessage("当前数据源不支持掉帧仿真")
+            return
+        self.data_source.set_packet_loss_enabled(enabled)  # type: ignore[attr-defined]
         self.packet_loss_rate_spin.setEnabled(enabled)
-        self.data_generator.set_packet_loss_rate(self.packet_loss_rate_spin.value() / 100.0)
+        self.data_source.set_packet_loss_rate(self.packet_loss_rate_spin.value() / 100.0)  # type: ignore[attr-defined]
         if enabled:
             self.status_bar.showMessage(
                 f"已启用掉帧仿真 | 丢包率: {self.packet_loss_rate_spin.value():.0f}%"
@@ -339,7 +370,9 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("已关闭掉帧仿真")
 
     def on_packet_loss_rate_changed(self, value: float) -> None:
-        self.data_generator.set_packet_loss_rate(value / 100.0)
+        if not self.packet_loss_controls_supported:
+            return
+        self.data_source.set_packet_loss_rate(value / 100.0)  # type: ignore[attr-defined]
         if self.packet_loss_checkbox.isChecked():
             self.status_bar.showMessage(f"已调整掉帧仿真丢包率: {value:.0f}%")
 
@@ -384,8 +417,8 @@ class MainWindow(QMainWindow):
         speed = max(self.playback_speed, 0.1)
         return max(10, int(self.base_timer_interval_ms / speed))
 
-    def update_platform_table(self, platform_list: list[dict]) -> None:
-        incoming_ids = {str(platform_info["id"]) for platform_info in platform_list}
+    def update_platform_table(self, platform_list: list[PlatformState]) -> None:
+        incoming_ids = {str(platform_info.id) for platform_info in platform_list}
         removed_ids = [pid for pid in self.platform_row_by_id if pid not in incoming_ids]
         if removed_ids:
             blocker = QSignalBlocker(self.platform_table)
@@ -401,18 +434,18 @@ class MainWindow(QMainWindow):
                 del blocker
 
         for platform_info in platform_list:
-            platform_id = str(platform_info["id"])
+            platform_id = str(platform_info.id)
             row = self.platform_row_by_id.get(platform_id)
             if row is None:
                 row = self.platform_table.rowCount()
                 self.platform_table.insertRow(row)
                 self.platform_row_by_id[platform_id] = row
                 self._set_table_text(row, 0, platform_id)
-                self._set_table_text(row, 1, str(platform_info.get("type", "--")))
+                self._set_table_text(row, 1, str(platform_info.type))
 
-            self._set_table_text(row, 2, f'{platform_info.get("speed", 0.0):.2f}')
-            self._set_table_text(row, 3, f'{platform_info.get("timestamp", 0.0):.2f}')
-            is_stale = self.map_view.is_platform_stale(platform_id)
+            self._set_table_text(row, 2, f"{platform_info.speed:.2f}")
+            self._set_table_text(row, 3, f"{platform_info.timestamp:.2f}")
+            is_stale = self.platform_manager.is_platform_stale(platform_id)
             self._set_table_text(row, 4, "超时" if is_stale else "正常")
             self._set_row_style(row, is_stale)
 
@@ -463,6 +496,7 @@ class MainWindow(QMainWindow):
 
         platform_id = id_item.text()
         if self.map_view.select_platform_by_id(platform_id):
+            self.platform_manager.set_selected_platform(platform_id)
             self.map_view.center_on_selected()
 
     def sync_table_selection(self, platform_id: str) -> None:
@@ -481,9 +515,12 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "关于",
-            "205_nav_ui 原型（第十四步）\n\n"
+            "205_nav_ui 原型（第十五步）\n\n"
             "当前功能：\n"
             "- UAV/UGV 不同图形显示\n"
+            "- 平台状态统一dataclass（含在线与真值预留字段）\n"
+            "- PlatformManager 集中管理状态/告警/移除\n"
+            "- 数据源接口抽象，可替换接入\n"
             "- 平台列表联动选中与定位\n"
             "- 数据新鲜度告警（超时灰显）\n"
             "- 下线平台自动移除（图元/轨迹/列表）\n"

@@ -1,9 +1,11 @@
 import math
 import random
-from typing import List
+
+from data_source import PlatformDataSource
+from models import PlatformState
 
 
-class FakeDataGenerator:
+class FakeDataGenerator(PlatformDataSource):
     """生成用于界面原型测试的假数据。"""
 
     def __init__(self) -> None:
@@ -26,22 +28,26 @@ class FakeDataGenerator:
     def set_packet_loss_rate(self, rate: float) -> None:
         self.packet_loss_rate = max(0.0, min(0.95, rate))
 
-    def get_initial_data(self) -> List[dict]:
-        initial = []
+    def get_initial_data(self) -> list[PlatformState]:
+        initial: list[PlatformState] = []
         for platform in self.platforms:
             initial.append(
-                {
-                    "id": platform["id"],
-                    "type": platform["type"],
-                    "x": platform["x"],
-                    "y": platform["y"],
-                    "z": platform["z"],
-                    "vx": 0.0,
-                    "vy": 0.0,
-                    "vz": 0.0,
-                    "speed": 0.0,
-                    "timestamp": self.t,
-                }
+                PlatformState(
+                    id=platform["id"],
+                    type=platform["type"],
+                    x=platform["x"],
+                    y=platform["y"],
+                    z=platform["z"],
+                    vx=0.0,
+                    vy=0.0,
+                    vz=0.0,
+                    speed=0.0,
+                    timestamp=self.t,
+                    is_online=True,
+                    truth_x=None,
+                    truth_y=None,
+                    truth_z=None,
+                )
             )
         return initial
 
@@ -59,10 +65,10 @@ class FakeDataGenerator:
 
         return x, y, z
 
-    def get_next_frame(self) -> List[dict]:
+    def get_next_frame(self) -> list[PlatformState]:
         self.t += self.dt
 
-        updated = []
+        updated: list[PlatformState] = []
         for i, platform in enumerate(self.platforms):
             x_prev, y_prev, z_prev = self._calc_position(platform, i, self.t - self.dt)
             x, y, z = self._calc_position(platform, i, self.t)
@@ -73,18 +79,22 @@ class FakeDataGenerator:
             speed = math.sqrt(vx * vx + vy * vy + vz * vz)
 
             updated.append(
-                {
-                    "id": platform["id"],
-                    "type": platform["type"],
-                    "x": x,
-                    "y": y,
-                    "z": z,
-                    "vx": vx,
-                    "vy": vy,
-                    "vz": vz,
-                    "speed": speed,
-                    "timestamp": self.t,
-                }
+                PlatformState(
+                    id=platform["id"],
+                    type=platform["type"],
+                    x=x,
+                    y=y,
+                    z=z,
+                    vx=vx,
+                    vy=vy,
+                    vz=vz,
+                    speed=speed,
+                    timestamp=self.t,
+                    is_online=True,
+                    truth_x=None,
+                    truth_y=None,
+                    truth_z=None,
+                )
             )
 
         if not self.packet_loss_enabled or self.packet_loss_rate <= 0.0:
