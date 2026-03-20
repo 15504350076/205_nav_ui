@@ -40,6 +40,7 @@ from data_source import PlatformDataSource
 from error_plot_widget import ErrorPlotWidget
 from models import PlatformState
 from platform_manager import PlatformManager
+from ui_state import UiState, load_ui_state, save_ui_state
 
 
 class NumericTableWidgetItem(QTableWidgetItem):
@@ -1623,20 +1624,9 @@ class MainWindow(QMainWindow):
 
     def _load_ui_state(self) -> None:
         store_path = self._ui_state_store_path()
-        if not store_path.exists():
+        state = load_ui_state(store_path)
+        if state is None:
             return
-        try:
-            data = json.loads(store_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return
-        if not isinstance(data, dict):
-            return
-
-        def _safe_float(value: object, default: float) -> float:
-            try:
-                return float(value)
-            except (TypeError, ValueError):
-                return default
 
         self._is_loading_ui_state = True
         try:
@@ -1649,63 +1639,47 @@ class MainWindow(QMainWindow):
                 QSignalBlocker(self.alert_keyword_edit),
             ]
             try:
-                platform_type_filter = data.get("platform_type_filter", "all")
-                platform_status_filter = data.get("platform_status_filter", "all")
-                platform_keyword = str(data.get("platform_keyword", ""))
-                self._set_combo_to_saved_data(self.platform_type_filter_combo, platform_type_filter)
-                self._set_combo_to_saved_data(self.platform_status_filter_combo, platform_status_filter)
-                self.platform_keyword_edit.setText(platform_keyword)
+                self._set_combo_to_saved_data(
+                    self.platform_type_filter_combo,
+                    state.platform_type_filter,
+                )
+                self._set_combo_to_saved_data(
+                    self.platform_status_filter_combo,
+                    state.platform_status_filter,
+                )
+                self.platform_keyword_edit.setText(state.platform_keyword)
 
-                alert_level_filter = data.get("alert_level_filter", "all")
-                alert_status_filter = data.get("alert_status_filter", "all")
-                alert_keyword = str(data.get("alert_keyword", ""))
-                self._set_combo_to_saved_data(self.alert_level_filter_combo, alert_level_filter)
-                self._set_combo_to_saved_data(self.alert_status_filter_combo, alert_status_filter)
-                self.alert_keyword_edit.setText(alert_keyword)
+                self._set_combo_to_saved_data(
+                    self.alert_level_filter_combo,
+                    state.alert_level_filter,
+                )
+                self._set_combo_to_saved_data(
+                    self.alert_status_filter_combo,
+                    state.alert_status_filter,
+                )
+                self.alert_keyword_edit.setText(state.alert_keyword)
             finally:
                 for blocker in blockers:
                     del blocker
 
-            self.follow_checkbox.setChecked(bool(data.get("follow_selected", False)))
-            self.follow_lock_checkbox.setChecked(bool(data.get("follow_lock_when_enabled", True)))
-            self.track_checkbox.setChecked(bool(data.get("show_tracks", True)))
-            self.label_checkbox.setChecked(bool(data.get("show_labels", True)))
-            self.truth_checkbox.setChecked(bool(data.get("show_truth_points", True)))
-            self.truth_track_checkbox.setChecked(bool(data.get("show_truth_tracks", True)))
-            self.velocity_vector_checkbox.setChecked(bool(data.get("show_velocity_vectors", False)))
+            self.follow_checkbox.setChecked(state.follow_selected)
+            self.follow_lock_checkbox.setChecked(state.follow_lock_when_enabled)
+            self.track_checkbox.setChecked(state.show_tracks)
+            self.label_checkbox.setChecked(state.show_labels)
+            self.truth_checkbox.setChecked(state.show_truth_points)
+            self.truth_track_checkbox.setChecked(state.show_truth_tracks)
+            self.velocity_vector_checkbox.setChecked(state.show_velocity_vectors)
 
-            self.track_duration_spin.setValue(
-                _safe_float(data.get("track_duration_sec"), self.track_duration_spin.value())
-            )
+            self.track_duration_spin.setValue(state.track_duration_sec)
+            self.alert_error_threshold_spin.setValue(state.alert_error_threshold)
+            self.alert_use_type_threshold_checkbox.setChecked(state.alert_use_type_threshold)
+            self.alert_error_threshold_uav_spin.setValue(state.alert_error_threshold_uav)
+            self.alert_error_threshold_ugv_spin.setValue(state.alert_error_threshold_ugv)
 
-            self.alert_error_threshold_spin.setValue(
-                _safe_float(data.get("alert_error_threshold"), self.alert_error_threshold_spin.value())
-            )
-            self.alert_use_type_threshold_checkbox.setChecked(
-                bool(data.get("alert_use_type_threshold", False))
-            )
-            self.alert_error_threshold_uav_spin.setValue(
-                _safe_float(
-                    data.get("alert_error_threshold_uav"),
-                    self.alert_error_threshold_uav_spin.value(),
-                )
-            )
-            self.alert_error_threshold_ugv_spin.setValue(
-                _safe_float(
-                    data.get("alert_error_threshold_ugv"),
-                    self.alert_error_threshold_ugv_spin.value(),
-                )
-            )
-
-            sort_column_raw = data.get("platform_sort_column", 0)
-            sort_order_raw = data.get("platform_sort_order", Qt.SortOrder.AscendingOrder.value)
+            sort_column = state.platform_sort_column
             try:
-                sort_column = int(sort_column_raw)
-            except (TypeError, ValueError):
-                sort_column = 0
-            try:
-                sort_order = Qt.SortOrder(int(sort_order_raw))
-            except (TypeError, ValueError):
+                sort_order = Qt.SortOrder(state.platform_sort_order)
+            except ValueError:
                 sort_order = Qt.SortOrder.AscendingOrder
             if 0 <= sort_column < self.platform_table.columnCount():
                 self.platform_table.horizontalHeader().setSortIndicator(sort_column, sort_order)
@@ -1719,40 +1693,29 @@ class MainWindow(QMainWindow):
     def _save_ui_state(self) -> None:
         if self._is_loading_ui_state or not self._ui_state_ready:
             return
-        store_path = self._ui_state_store_path()
-        store_path.parent.mkdir(parents=True, exist_ok=True)
-        sort_column = self.platform_table.horizontalHeader().sortIndicatorSection()
-        sort_order = self.platform_table.horizontalHeader().sortIndicatorOrder().value
-
-        payload = {
-            "platform_type_filter": self.platform_type_filter_combo.currentData(),
-            "platform_status_filter": self.platform_status_filter_combo.currentData(),
-            "platform_keyword": self.platform_keyword_edit.text().strip(),
-            "platform_sort_column": sort_column,
-            "platform_sort_order": sort_order,
-            "alert_level_filter": self.alert_level_filter_combo.currentData(),
-            "alert_status_filter": self.alert_status_filter_combo.currentData(),
-            "alert_keyword": self.alert_keyword_edit.text().strip(),
-            "follow_selected": self.follow_checkbox.isChecked(),
-            "follow_lock_when_enabled": self.follow_lock_checkbox.isChecked(),
-            "show_tracks": self.track_checkbox.isChecked(),
-            "show_labels": self.label_checkbox.isChecked(),
-            "show_truth_points": self.truth_checkbox.isChecked(),
-            "show_truth_tracks": self.truth_track_checkbox.isChecked(),
-            "show_velocity_vectors": self.velocity_vector_checkbox.isChecked(),
-            "track_duration_sec": self.track_duration_spin.value(),
-            "alert_error_threshold": self.alert_error_threshold_spin.value(),
-            "alert_use_type_threshold": self.alert_use_type_threshold_checkbox.isChecked(),
-            "alert_error_threshold_uav": self.alert_error_threshold_uav_spin.value(),
-            "alert_error_threshold_ugv": self.alert_error_threshold_ugv_spin.value(),
-        }
-        try:
-            store_path.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-        except OSError:
-            return
+        state = UiState(
+            platform_type_filter=str(self.platform_type_filter_combo.currentData()),
+            platform_status_filter=str(self.platform_status_filter_combo.currentData()),
+            platform_keyword=self.platform_keyword_edit.text().strip(),
+            platform_sort_column=self.platform_table.horizontalHeader().sortIndicatorSection(),
+            platform_sort_order=self.platform_table.horizontalHeader().sortIndicatorOrder().value,
+            alert_level_filter=str(self.alert_level_filter_combo.currentData()),
+            alert_status_filter=str(self.alert_status_filter_combo.currentData()),
+            alert_keyword=self.alert_keyword_edit.text().strip(),
+            follow_selected=self.follow_checkbox.isChecked(),
+            follow_lock_when_enabled=self.follow_lock_checkbox.isChecked(),
+            show_tracks=self.track_checkbox.isChecked(),
+            show_labels=self.label_checkbox.isChecked(),
+            show_truth_points=self.truth_checkbox.isChecked(),
+            show_truth_tracks=self.truth_track_checkbox.isChecked(),
+            show_velocity_vectors=self.velocity_vector_checkbox.isChecked(),
+            track_duration_sec=self.track_duration_spin.value(),
+            alert_error_threshold=self.alert_error_threshold_spin.value(),
+            alert_use_type_threshold=self.alert_use_type_threshold_checkbox.isChecked(),
+            alert_error_threshold_uav=self.alert_error_threshold_uav_spin.value(),
+            alert_error_threshold_ugv=self.alert_error_threshold_ugv_spin.value(),
+        )
+        save_ui_state(self._ui_state_store_path(), state)
 
     def _pinned_store_path(self) -> Path:
         return Path.cwd() / "exports" / ".pinned_exports.json"

@@ -79,6 +79,8 @@ PySide6 原型界面，用于无人机（UAV）与无人车（UGV）协同导航
   - `PlatformDataSource` 协议（可替换数据源接口）
 - `platform_manager.py`
   - 集中管理平台状态、超时告警、超时移除、选中状态
+- `ui_state.py`
+  - 统一管理 UI 筛选/排序/显示开关/阈值配置的序列化与持久化
 - `map_view.py`
   - 只负责可视化：图元、轨迹、真值层、视图交互
 - `main_window.py`
@@ -131,6 +133,7 @@ python3 -m pytest -q
 
 - `tests/test_platform_manager.py`
 - `tests/test_fake_data.py`
+- `tests/test_ui_state.py`
 
 ## 6. 后续建议
 
