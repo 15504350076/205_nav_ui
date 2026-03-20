@@ -1,6 +1,5 @@
 import csv
 import json
-import math
 from datetime import datetime
 from pathlib import Path
 
@@ -58,6 +57,8 @@ from alert_history import (
     prune_alert_history,
     save_alert_history,
 )
+from alert_center import AlertRow, should_show_alert, summarize_alert_rows
+from alert_runtime import RuntimeAlertEngine
 from ui_state import UiState, load_ui_state, save_ui_state
 
 
@@ -114,9 +115,7 @@ class MainWindow(QMainWindow):
         self.replay_file_path: Path | None = None
         self._syncing_replay_slider = False
         self.alert_max_rows = 400
-        self.last_stale_platform_ids: set[str] = set()
-        self.last_error_alert_timestamp_by_id: dict[str, float] = {}
-        self.error_exceed_count_by_id: dict[str, int] = {}
+        self.runtime_alert_engine = RuntimeAlertEngine()
         self.alert_id_threshold_overrides: dict[str, float] = {}
         self.last_alert_threshold_import_meta: AlertThresholdConfigFileMeta | None = None
         self._is_restoring_alert_history = False
@@ -1158,8 +1157,7 @@ class MainWindow(QMainWindow):
             planar_enabled
         )
         if not planar_enabled:
-            self.last_error_alert_timestamp_by_id.clear()
-            self.error_exceed_count_by_id.clear()
+            self.runtime_alert_engine.clear_planar_error_state()
         if self._is_loading_ui_state:
             return
         self._save_ui_state()
@@ -1177,25 +1175,16 @@ class MainWindow(QMainWindow):
         for row in range(self.alert_table.rowCount()):
             if visible_only and self.alert_table.isRowHidden(row):
                 continue
+            row_data = self._read_alert_row(row)
             time_item = self.alert_table.item(row, 0)
-            level_item = self.alert_table.item(row, 1)
-            source_item = self.alert_table.item(row, 2)
-            message_item = self.alert_table.item(row, 3)
-            status_item = self.alert_table.item(row, 4)
-
-            epoch_value = 0.0
-            if time_item is not None:
-                raw_epoch = time_item.data(Qt.ItemDataRole.UserRole)
-                if isinstance(raw_epoch, (float, int)):
-                    epoch_value = float(raw_epoch)
             records.append(
                 AlertRecord(
-                    epoch=epoch_value,
+                    epoch=row_data.epoch if row_data.epoch is not None else 0.0,
                     time_text=time_item.text() if time_item is not None else "",
-                    level=level_item.text() if level_item is not None else "INFO",
-                    source=source_item.text() if source_item is not None else "--",
-                    message=message_item.text() if message_item is not None else "",
-                    status=status_item.text() if status_item is not None else "未确认",
+                    level=row_data.level,
+                    source=row_data.source,
+                    message=row_data.message,
+                    status=row_data.status,
                 )
             )
         return records
@@ -2014,9 +2003,7 @@ class MainWindow(QMainWindow):
         self.platform_table.clearSelection()
         self.clear_selected_platform_info()
         self.map_view.set_stale_platforms(set())
-        self.last_stale_platform_ids = set()
-        self.last_error_alert_timestamp_by_id.clear()
-        self.error_exceed_count_by_id.clear()
+        self.runtime_alert_engine.reset()
 
     def _raise_runtime_alerts(
         self,
@@ -2024,69 +2011,21 @@ class MainWindow(QMainWindow):
         stale_ids: set[str],
         removed_ids: list[str],
     ) -> None:
-        if not self.alert_trigger_enabled_checkbox.isChecked():
-            self.error_exceed_count_by_id.clear()
-            self.last_stale_platform_ids = set(stale_ids)
-            return
-
-        newly_stale = stale_ids - self.last_stale_platform_ids
-        recovered = self.last_stale_platform_ids - stale_ids
-
-        if self.alert_enable_stale_checkbox.isChecked():
-            for platform_id in sorted(newly_stale):
-                self._append_alert("WARN", platform_id, "平台状态超时")
-
-        if self.alert_enable_recover_checkbox.isChecked():
-            for platform_id in sorted(recovered):
-                self._append_alert("INFO", platform_id, "平台恢复正常")
-
-        if self.alert_enable_offline_checkbox.isChecked():
-            for platform_id in removed_ids:
-                self._append_alert("ERROR", platform_id, "平台超时下线并已移除")
-
-        if self.alert_enable_planar_error_checkbox.isChecked():
-            cooldown_sec = self.alert_error_cooldown_spin.value()
-            escalate_count = self.alert_error_escalate_count_spin.value()
-            active_ids = {str(state.id) for state in all_platforms}
-            for platform_id in list(self.error_exceed_count_by_id):
-                if platform_id not in active_ids:
-                    self.error_exceed_count_by_id.pop(platform_id, None)
-
-            for state in all_platforms:
-                if state.truth_x is None or state.truth_y is None:
-                    continue
-
-                planar_error = math.hypot(state.x - state.truth_x, state.y - state.truth_y)
-                error_threshold, threshold_scope = self._error_threshold_for_platform(
-                    state.id,
-                    state.type,
-                )
-                platform_id = str(state.id)
-                if planar_error <= error_threshold:
-                    self.error_exceed_count_by_id[platform_id] = 0
-                    continue
-
-                exceed_count = self.error_exceed_count_by_id.get(platform_id, 0) + 1
-                self.error_exceed_count_by_id[platform_id] = exceed_count
-
-                last_alert_ts = self.last_error_alert_timestamp_by_id.get(platform_id, -1e9)
-                if state.timestamp - last_alert_ts < cooldown_sec:
-                    continue
-
-                self.last_error_alert_timestamp_by_id[platform_id] = state.timestamp
-                level = "ERROR" if exceed_count >= escalate_count else "WARN"
-                self._append_alert(
-                    level,
-                    state.id,
-                    (
-                        f"平面误差超阈值: {planar_error:.2f} m "
-                        f"(> {error_threshold:.2f} m, {threshold_scope}, 连续{exceed_count}次)"
-                    ),
-                )
-        else:
-            self.error_exceed_count_by_id.clear()
-
-        self.last_stale_platform_ids = set(stale_ids)
+        events = self.runtime_alert_engine.evaluate(
+            all_platforms=all_platforms,
+            stale_ids=stale_ids,
+            removed_ids=removed_ids,
+            trigger_enabled=self.alert_trigger_enabled_checkbox.isChecked(),
+            enable_stale=self.alert_enable_stale_checkbox.isChecked(),
+            enable_recover=self.alert_enable_recover_checkbox.isChecked(),
+            enable_offline=self.alert_enable_offline_checkbox.isChecked(),
+            enable_planar_error=self.alert_enable_planar_error_checkbox.isChecked(),
+            cooldown_sec=self.alert_error_cooldown_spin.value(),
+            escalate_count=self.alert_error_escalate_count_spin.value(),
+            threshold_resolver=self._error_threshold_for_platform,
+        )
+        for event in events:
+            self._append_alert(event.level, event.source, event.message)
 
     def _append_alert(
         self,
@@ -2133,6 +2072,25 @@ class MainWindow(QMainWindow):
         if persist_history:
             self._persist_alert_history_snapshot()
 
+    def _read_alert_row(self, row: int) -> AlertRow:
+        level_text = self.alert_table.item(row, 1).text() if self.alert_table.item(row, 1) else ""
+        source_text = self.alert_table.item(row, 2).text() if self.alert_table.item(row, 2) else ""
+        message_text = self.alert_table.item(row, 3).text() if self.alert_table.item(row, 3) else ""
+        status_text = self.alert_table.item(row, 4).text() if self.alert_table.item(row, 4) else ""
+        time_item = self.alert_table.item(row, 0)
+        epoch_value: float | None = None
+        if time_item is not None:
+            raw_epoch = time_item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(raw_epoch, (float, int)):
+                epoch_value = float(raw_epoch)
+        return AlertRow(
+            epoch=epoch_value,
+            level=level_text,
+            source=source_text,
+            message=message_text,
+            status=status_text,
+        )
+
     def apply_alert_filters(self, _signal_value: object | None = None) -> None:
         level_filter = self.alert_level_filter_combo.currentData()
         status_filter = self.alert_status_filter_combo.currentData()
@@ -2141,27 +2099,15 @@ class MainWindow(QMainWindow):
         now_epoch = datetime.now().timestamp()
 
         for row in range(self.alert_table.rowCount()):
-            level_text = self.alert_table.item(row, 1).text() if self.alert_table.item(row, 1) else ""
-            source_text = self.alert_table.item(row, 2).text() if self.alert_table.item(row, 2) else ""
-            message_text = self.alert_table.item(row, 3).text() if self.alert_table.item(row, 3) else ""
-            status_text = self.alert_table.item(row, 4).text() if self.alert_table.item(row, 4) else ""
-            time_item = self.alert_table.item(row, 0)
-            epoch_value: float | None = None
-            if time_item is not None:
-                raw_epoch = time_item.data(Qt.ItemDataRole.UserRole)
-                if isinstance(raw_epoch, (float, int)):
-                    epoch_value = float(raw_epoch)
-
-            visible = True
-            if level_filter not in (None, "all") and level_text != str(level_filter):
-                visible = False
-            if status_filter not in (None, "all") and status_text != str(status_filter):
-                visible = False
-            if time_window_sec is not None and epoch_value is not None:
-                if now_epoch - epoch_value > float(time_window_sec):
-                    visible = False
-            if keyword and keyword not in source_text.lower() and keyword not in message_text.lower():
-                visible = False
+            row_data = self._read_alert_row(row)
+            visible = should_show_alert(
+                row_data,
+                level_filter=level_filter,
+                status_filter=status_filter,
+                time_window_sec=time_window_sec,
+                keyword=keyword,
+                now_epoch=now_epoch,
+            )
             self.alert_table.setRowHidden(row, not visible)
         self.update_alert_statistics()
 
@@ -2188,40 +2134,12 @@ class MainWindow(QMainWindow):
         self,
         visible_only: bool = True,
     ) -> tuple[dict[str, int], dict[str, dict[str, int]]]:
-        summary = {
-            "total": 0,
-            "INFO": 0,
-            "WARN": 0,
-            "ERROR": 0,
-            "unacked": 0,
-        }
-        by_source: dict[str, dict[str, int]] = {}
-
+        rows: list[AlertRow] = []
         for row in range(self.alert_table.rowCount()):
             if visible_only and self.alert_table.isRowHidden(row):
                 continue
-
-            level_text = self.alert_table.item(row, 1).text() if self.alert_table.item(row, 1) else "INFO"
-            source_text = self.alert_table.item(row, 2).text() if self.alert_table.item(row, 2) else "--"
-            status_text = self.alert_table.item(row, 4).text() if self.alert_table.item(row, 4) else "未确认"
-
-            summary["total"] += 1
-            if level_text in ("INFO", "WARN", "ERROR"):
-                summary[level_text] += 1
-            if status_text == "未确认":
-                summary["unacked"] += 1
-
-            source_stats = by_source.setdefault(
-                source_text,
-                {"total": 0, "INFO": 0, "WARN": 0, "ERROR": 0, "unacked": 0},
-            )
-            source_stats["total"] += 1
-            if level_text in ("INFO", "WARN", "ERROR"):
-                source_stats[level_text] += 1
-            if status_text == "未确认":
-                source_stats["unacked"] += 1
-
-        return summary, by_source
+            rows.append(self._read_alert_row(row))
+        return summarize_alert_rows(rows)
 
     def update_alert_statistics(self) -> None:
         summary, by_source = self._collect_alert_statistics(visible_only=True)

@@ -78,9 +78,7 @@ def alert_window(qapp: QApplication, tmp_path, monkeypatch: pytest.MonkeyPatch):
     window = MainWindow(data_source=EmptyDataSource())
     window.timer.stop()
     window.alert_table.setRowCount(0)
-    window.last_stale_platform_ids = set()
-    window.last_error_alert_timestamp_by_id.clear()
-    window.error_exceed_count_by_id.clear()
+    window.runtime_alert_engine.reset()
     try:
         yield window
     finally:
@@ -95,7 +93,7 @@ def test_apply_frame_update_raises_stale_and_recover_alerts(alert_window: MainWi
         [make_state("U1", 0.0), make_state("G1", 0.0, platform_type="UGV")]
     )
     alert_window.alert_table.setRowCount(0)
-    alert_window.last_stale_platform_ids = set()
+    alert_window.runtime_alert_engine.last_stale_platform_ids = set()
 
     alert_window._apply_frame_update([make_state("G1", 1.0, platform_type="UGV")])
     alert_window._apply_frame_update(
@@ -118,7 +116,7 @@ def test_apply_frame_update_raises_offline_alert_on_removal(alert_window: MainWi
         [make_state("U1", 0.0), make_state("G1", 0.0, platform_type="UGV")]
     )
     alert_window.alert_table.setRowCount(0)
-    alert_window.last_stale_platform_ids = set()
+    alert_window.runtime_alert_engine.last_stale_platform_ids = set()
 
     alert_window._apply_frame_update([make_state("G1", 1.2, platform_type="UGV")])
 
