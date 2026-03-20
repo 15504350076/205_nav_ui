@@ -28,25 +28,45 @@ class FakeDataGenerator(PlatformDataSource):
     def set_packet_loss_rate(self, rate: float) -> None:
         self.packet_loss_rate = max(0.0, min(0.95, rate))
 
+    def _estimate_from_truth(
+        self, truth_x: float, truth_y: float, truth_z: float, platform_type: str
+    ) -> tuple[float, float, float]:
+        if platform_type == "UAV":
+            xy_std = 1.2
+            z_std = 0.8
+        else:
+            xy_std = 0.6
+            z_std = 0.2
+        est_x = truth_x + self.rng.gauss(0.0, xy_std)
+        est_y = truth_y + self.rng.gauss(0.0, xy_std)
+        est_z = truth_z + self.rng.gauss(0.0, z_std)
+        return est_x, est_y, est_z
+
     def get_initial_data(self) -> list[PlatformState]:
         initial: list[PlatformState] = []
         for platform in self.platforms:
+            truth_x = platform["x"]
+            truth_y = platform["y"]
+            truth_z = platform["z"]
+            est_x, est_y, est_z = self._estimate_from_truth(
+                truth_x, truth_y, truth_z, platform["type"]
+            )
             initial.append(
                 PlatformState(
                     id=platform["id"],
                     type=platform["type"],
-                    x=platform["x"],
-                    y=platform["y"],
-                    z=platform["z"],
+                    x=est_x,
+                    y=est_y,
+                    z=est_z,
                     vx=0.0,
                     vy=0.0,
                     vz=0.0,
                     speed=0.0,
                     timestamp=self.t,
                     is_online=True,
-                    truth_x=None,
-                    truth_y=None,
-                    truth_z=None,
+                    truth_x=truth_x,
+                    truth_y=truth_y,
+                    truth_z=truth_z,
                 )
             )
         return initial
@@ -70,12 +90,17 @@ class FakeDataGenerator(PlatformDataSource):
 
         updated: list[PlatformState] = []
         for i, platform in enumerate(self.platforms):
-            x_prev, y_prev, z_prev = self._calc_position(platform, i, self.t - self.dt)
-            x, y, z = self._calc_position(platform, i, self.t)
+            truth_prev_x, truth_prev_y, truth_prev_z = self._calc_position(
+                platform, i, self.t - self.dt
+            )
+            truth_x, truth_y, truth_z = self._calc_position(platform, i, self.t)
+            x, y, z = self._estimate_from_truth(
+                truth_x, truth_y, truth_z, platform["type"]
+            )
 
-            vx = (x - x_prev) / self.dt
-            vy = (y - y_prev) / self.dt
-            vz = (z - z_prev) / self.dt
+            vx = (truth_x - truth_prev_x) / self.dt
+            vy = (truth_y - truth_prev_y) / self.dt
+            vz = (truth_z - truth_prev_z) / self.dt
             speed = math.sqrt(vx * vx + vy * vy + vz * vz)
 
             updated.append(
@@ -91,9 +116,9 @@ class FakeDataGenerator(PlatformDataSource):
                     speed=speed,
                     timestamp=self.t,
                     is_online=True,
-                    truth_x=None,
-                    truth_y=None,
-                    truth_z=None,
+                    truth_x=truth_x,
+                    truth_y=truth_y,
+                    truth_z=truth_z,
                 )
             )
 

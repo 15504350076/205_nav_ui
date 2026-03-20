@@ -26,10 +26,12 @@ class MapView(QGraphicsView):
         self.latest_platform_info: dict[str, PlatformState] = {}
         self.track_items: dict[str, QGraphicsPathItem] = {}
         self.track_history: dict[str, list[QPointF]] = {}
+        self.truth_items: dict[str, QGraphicsEllipseItem] = {}
         self.stale_platform_ids: set[str] = set()
         self.selected_platform_id: str | None = None
         self.show_tracks = True
         self.show_labels = True
+        self.show_truth_points = True
         self.follow_selected = False
         self.lock_pan_when_follow = True
         self.max_track_points = 120
@@ -74,6 +76,17 @@ class MapView(QGraphicsView):
         ugv_text.setBrush(QBrush(QColor(230, 230, 230)))
         ugv_text.setPos(legend_x + 22, legend_y + 47)
         self.scene.addItem(ugv_text)
+
+        truth_shape = QGraphicsEllipseItem(0, 0, 14, 14)
+        truth_shape.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+        truth_shape.setPen(QPen(QColor(180, 255, 120), 1.5, Qt.PenStyle.DashLine))
+        truth_shape.setPos(legend_x, legend_y + 75)
+        self.scene.addItem(truth_shape)
+
+        truth_text = QGraphicsSimpleTextItem("Truth")
+        truth_text.setBrush(QBrush(QColor(230, 230, 230)))
+        truth_text.setPos(legend_x + 22, legend_y + 72)
+        self.scene.addItem(truth_text)
 
     def drawBackground(self, painter: QPainter, rect) -> None:
         super().drawBackground(painter, rect)
@@ -125,6 +138,15 @@ class MapView(QGraphicsView):
             QPointF(platform_info.x, platform_info.y)
         ]
 
+        truth_item = QGraphicsEllipseItem(-5, -5, 10, 10)
+        truth_item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+        truth_item.setPen(QPen(QColor(180, 255, 120), 1.5, Qt.PenStyle.DashLine))
+        truth_item.setVisible(False)
+        truth_item.setZValue(0.5)
+        self.scene.addItem(truth_item)
+        self.truth_items[platform_info.id] = truth_item
+        self._update_truth_marker(platform_info.id, platform_info)
+
     def update_platform(self, platform_info: PlatformState) -> None:
         platform_id = platform_info.id
         if platform_id not in self.platform_items:
@@ -140,6 +162,7 @@ class MapView(QGraphicsView):
 
         self.latest_platform_info[platform_id] = platform_info
         self._update_track(platform_id, platform_info.x, platform_info.y)
+        self._update_truth_marker(platform_id, platform_info)
 
     def _update_track(self, platform_id: str, x: float, y: float) -> None:
         if platform_id not in self.track_history:
@@ -261,6 +284,16 @@ class MapView(QGraphicsView):
         for item in self.platform_items.values():
             item.set_label_visible(show)
 
+    def set_show_truth_points(self, show: bool) -> None:
+        self.show_truth_points = show
+        for platform_id, truth_item in self.truth_items.items():
+            state = self.latest_platform_info.get(platform_id)
+            if state is None:
+                truth_item.setVisible(False)
+                continue
+            has_truth = state.truth_x is not None and state.truth_y is not None
+            truth_item.setVisible(self.show_truth_points and has_truth)
+
     def set_follow_selected(self, follow: bool) -> None:
         self.follow_selected = follow
         self._update_drag_mode()
@@ -337,9 +370,23 @@ class MapView(QGraphicsView):
         if track_item is not None:
             self.scene.removeItem(track_item)
 
+        truth_item = self.truth_items.pop(platform_id, None)
+        if truth_item is not None:
+            self.scene.removeItem(truth_item)
+
         self.track_history.pop(platform_id, None)
         self.latest_platform_info.pop(platform_id, None)
         self.stale_platform_ids.discard(platform_id)
 
         if self.selected_platform_id == platform_id:
             self.selected_platform_id = None
+
+    def _update_truth_marker(self, platform_id: str, platform_info: PlatformState) -> None:
+        truth_item = self.truth_items.get(platform_id)
+        if truth_item is None:
+            return
+        if platform_info.truth_x is None or platform_info.truth_y is None:
+            truth_item.setVisible(False)
+            return
+        truth_item.setPos(platform_info.truth_x, platform_info.truth_y)
+        truth_item.setVisible(self.show_truth_points)
