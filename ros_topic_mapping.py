@@ -77,9 +77,14 @@ def _stamp_to_seconds(stamp_like: Any, default: float) -> float:
     if sec is None:
         return default
     sec_float = _as_float(sec, default)
+    # Many ROS publishers leave PoseStamped.header.stamp as 0.
+    # Treat zero stamp as "missing" and fallback to local receipt time.
     if nanosec is None:
-        return sec_float
-    return sec_float + _as_float(nanosec, 0.0) / 1e9
+        return default if sec_float == 0.0 else sec_float
+    nsec_float = _as_float(nanosec, 0.0)
+    if sec_float == 0.0 and nsec_float == 0.0:
+        return default
+    return sec_float + nsec_float / 1e9
 
 
 def payload_from_ros_pose_message(

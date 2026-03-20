@@ -85,6 +85,30 @@ def test_payload_from_ros_pose_message() -> None:
     assert payload["type"] == "UAV"
 
 
+def test_payload_from_ros_pose_message_falls_back_on_zero_stamp() -> None:
+    class Stamp:
+        sec = 0
+        nanosec = 0
+
+    class Header:
+        stamp = Stamp()
+
+    class Position:
+        x = 5.0
+        y = 6.0
+        z = 7.0
+
+    class Pose:
+        position = Position()
+
+    class PoseStampedLike:
+        header = Header()
+        pose = Pose()
+
+    payload = payload_from_ros_pose_message(PoseStampedLike(), default_timestamp=123.0)
+    assert payload["timestamp"] == 123.0
+
+
 def test_payload_from_ros_health_message_with_json() -> None:
     class StringLike:
         data = '{"is_online": false, "link_state": "LOST", "nav_state": "DEGRADED", "timestamp": 9.0}'

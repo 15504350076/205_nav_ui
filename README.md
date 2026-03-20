@@ -198,6 +198,28 @@ python3 app.py --source ros2 --ros2-platform-id UAV1
 {"is_online": true, "link_state": "OK", "nav_state": "TRACKING", "timestamp": 1710000000.1}
 ```
 
+### 4.2 ROS2 一键联调脚本
+
+已提供最小闭环发布脚本：
+
+- `scripts/ros2_demo_publishers.sh`
+
+使用方式：
+
+```bash
+# 终端1：启动 UI
+python3 app.py --source ros2 --ros2-platform-id UAV1
+
+# 终端2：启动最小topic发布（默认 UAV1）
+./scripts/ros2_demo_publishers.sh UAV1
+```
+
+脚本会持续发布：
+
+- `/swarm/UAV1/nav/pose`
+- `/swarm/UAV1/truth/pose`
+- `/swarm/UAV1/health`
+
 如果遇到 Qt `xcb` 插件相关错误（例如缺 `libxcb-cursor0`），可安装：
 
 ```bash
