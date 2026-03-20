@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QGraphicsScene,
     QGraphicsSimpleTextItem,
     QGraphicsView,
+    QSizePolicy,
 )
 
 from models import PlatformState
@@ -45,11 +46,16 @@ class MapView(QGraphicsView):
         self.scene.setSceneRect(-400, -300, 800, 600)
         self.setScene(self.scene)
 
+        self.setFrameShape(QGraphicsView.Shape.NoFrame)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         self._update_drag_mode()
         self.setBackgroundBrush(QColor(35, 35, 35))
 
         self._add_legend()
+        self._fit_scene_to_view()
 
     def _add_legend(self) -> None:
         legend_x = -380
@@ -293,6 +299,7 @@ class MapView(QGraphicsView):
 
     def reset_view(self) -> None:
         self.resetTransform()
+        self._fit_scene_to_view()
 
     def set_show_tracks(self, show: bool) -> None:
         self.show_tracks = show
@@ -437,10 +444,14 @@ class MapView(QGraphicsView):
 
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key.Key_R:
-            self.resetTransform()
+            self.reset_view()
             event.accept()
             return
         super().keyPressEvent(event)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._fit_scene_to_view()
 
     def _center_on_selected(self) -> None:
         if self.selected_platform_id is None:
@@ -455,6 +466,11 @@ class MapView(QGraphicsView):
             self.setDragMode(QGraphicsView.DragMode.NoDrag)
             return
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+
+    def _fit_scene_to_view(self) -> None:
+        if self.viewport().width() <= 0 or self.viewport().height() <= 0:
+            return
+        self.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
     def _remove_platform(self, platform_id: str) -> None:
         platform_item = self.platform_items.pop(platform_id, None)

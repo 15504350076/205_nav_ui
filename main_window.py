@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSplitter,
     QStatusBar,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -84,15 +85,13 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
 
         main_layout = QHBoxLayout(central_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
         right_scroll = QScrollArea()
         right_scroll.setWidgetResizable(True)
         right_scroll.setFrameShape(QFrame.Shape.NoFrame)
         right_scroll.setMinimumWidth(300)
-
-        right_panel = QWidget()
-        right_layout = QVBoxLayout(right_panel)
-        right_layout.setContentsMargins(0, 0, 0, 0)
 
         info_group = QGroupBox("平台信息")
         form_layout = QFormLayout(info_group)
@@ -229,9 +228,31 @@ class MainWindow(QMainWindow):
         help_layout.addWidget(QLabel("18. 可导出选中平台误差CSV与曲线PNG"))
         help_layout.addWidget(QLabel("19. 左右分栏支持鼠标拖拽调宽"))
         help_layout.addWidget(QLabel("20. 导出索引支持最近文件查看与一键打开"))
+        help_layout.addWidget(QLabel("21. 导出索引支持类型与时间筛选"))
+        help_layout.addWidget(QLabel("22. 右侧功能按选项卡分类切换"))
 
         export_index_group = QGroupBox("导出索引")
         export_index_layout = QVBoxLayout(export_index_group)
+
+        export_filter_row = QHBoxLayout()
+        export_filter_row.addWidget(QLabel("类型"))
+        self.export_type_filter_combo = QComboBox()
+        self.export_type_filter_combo.addItem("全部", "all")
+        self.export_type_filter_combo.addItem("态势截图", "snapshot")
+        self.export_type_filter_combo.addItem("误差CSV", "error_csv")
+        self.export_type_filter_combo.addItem("误差曲线PNG", "error_plot")
+        self.export_type_filter_combo.currentIndexChanged.connect(self.refresh_export_index)
+        export_filter_row.addWidget(self.export_type_filter_combo)
+
+        export_filter_row.addWidget(QLabel("时间"))
+        self.export_time_filter_combo = QComboBox()
+        self.export_time_filter_combo.addItem("全部", None)
+        self.export_time_filter_combo.addItem("最近1小时", 60 * 60)
+        self.export_time_filter_combo.addItem("最近24小时", 24 * 60 * 60)
+        self.export_time_filter_combo.addItem("最近7天", 7 * 24 * 60 * 60)
+        self.export_time_filter_combo.currentIndexChanged.connect(self.refresh_export_index)
+        export_filter_row.addWidget(self.export_time_filter_combo)
+        export_index_layout.addLayout(export_filter_row)
 
         self.export_index_table = QTableWidget(0, 3)
         self.export_index_table.setHorizontalHeaderLabels(["文件名", "类型", "时间"])
@@ -312,20 +333,52 @@ class MainWindow(QMainWindow):
         export_error_plot_button.clicked.connect(self.on_export_error_plot)
         button_layout.addWidget(export_error_plot_button)
 
-        right_layout.addWidget(info_group)
-        right_layout.addWidget(error_group)
-        right_layout.addWidget(list_group)
-        right_layout.addWidget(display_group)
-        right_layout.addWidget(threshold_group)
-        right_layout.addWidget(sim_group)
-        right_layout.addWidget(help_group)
-        right_layout.addWidget(button_group)
-        right_layout.addWidget(export_index_group)
-        right_layout.addStretch()
+        self.right_tabs = QTabWidget()
+        self.right_tabs.setDocumentMode(True)
 
-        right_scroll.setWidget(right_panel)
+        monitor_tab = QWidget()
+        monitor_layout = QVBoxLayout(monitor_tab)
+        monitor_layout.setContentsMargins(6, 6, 6, 6)
+        monitor_layout.addWidget(info_group)
+        monitor_layout.addWidget(error_group)
+        monitor_layout.addWidget(list_group)
+        monitor_layout.addStretch()
+        self.right_tabs.addTab(monitor_tab, "监控")
+
+        display_tab = QWidget()
+        display_layout_tab = QVBoxLayout(display_tab)
+        display_layout_tab.setContentsMargins(6, 6, 6, 6)
+        display_layout_tab.addWidget(display_group)
+        display_layout_tab.addWidget(threshold_group)
+        display_layout_tab.addWidget(sim_group)
+        display_layout_tab.addStretch()
+        self.right_tabs.addTab(display_tab, "显示")
+
+        control_tab = QWidget()
+        control_layout = QVBoxLayout(control_tab)
+        control_layout.setContentsMargins(6, 6, 6, 6)
+        control_layout.addWidget(button_group)
+        control_layout.addStretch()
+        self.right_tabs.addTab(control_tab, "控制")
+
+        export_tab = QWidget()
+        export_layout = QVBoxLayout(export_tab)
+        export_layout.setContentsMargins(6, 6, 6, 6)
+        export_layout.addWidget(export_index_group)
+        export_layout.addStretch()
+        self.right_tabs.addTab(export_tab, "导出")
+
+        help_tab = QWidget()
+        help_tab_layout = QVBoxLayout(help_tab)
+        help_tab_layout.setContentsMargins(6, 6, 6, 6)
+        help_tab_layout.addWidget(help_group)
+        help_tab_layout.addStretch()
+        self.right_tabs.addTab(help_tab, "说明")
+
+        right_scroll.setWidget(self.right_tabs)
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.main_splitter.setHandleWidth(8)
+        self.main_splitter.setChildrenCollapsible(False)
         self.main_splitter.addWidget(self.map_view)
         self.main_splitter.addWidget(right_scroll)
         self.main_splitter.setStretchFactor(0, 4)
@@ -571,9 +624,16 @@ class MainWindow(QMainWindow):
         else:
             self.status_bar.showMessage("误差曲线图导出失败")
 
-    def refresh_export_index(self, focus_path: Path | None = None) -> None:
+    def refresh_export_index(
+        self,
+        _signal_value: int | None = None,
+        focus_path: Path | None = None,
+    ) -> None:
         export_root = Path.cwd() / "exports"
         entries: list[tuple[Path, float]] = []
+        selected_type = self.export_type_filter_combo.currentData()
+        selected_time_window_sec = self.export_time_filter_combo.currentData()
+        now_ts = datetime.now().timestamp()
 
         if export_root.exists():
             for path in export_root.rglob("*"):
@@ -582,6 +642,14 @@ class MainWindow(QMainWindow):
                 try:
                     mtime = path.stat().st_mtime
                 except OSError:
+                    continue
+                if (
+                    selected_time_window_sec is not None
+                    and now_ts - mtime > float(selected_time_window_sec)
+                ):
+                    continue
+                export_type_key = self._infer_export_type_key(path)
+                if selected_type not in (None, "all") and export_type_key != selected_type:
                     continue
                 entries.append((path, mtime))
 
@@ -602,7 +670,7 @@ class MainWindow(QMainWindow):
                 name_item.setToolTip(str(path))
                 self.export_index_table.setItem(row, 0, name_item)
 
-                type_item = QTableWidgetItem(self._infer_export_type(path))
+                type_item = QTableWidgetItem(self._infer_export_type_label(path))
                 self.export_index_table.setItem(row, 1, type_item)
 
                 time_item = QTableWidgetItem(
@@ -618,22 +686,26 @@ class MainWindow(QMainWindow):
             focus_row = 0
         self.export_index_table.selectRow(focus_row)
 
-    def _infer_export_type(self, path: Path) -> str:
+    def _infer_export_type_key(self, path: Path) -> str:
         file_name = path.name
         suffix = path.suffix.lower()
         if file_name.startswith("nav_snapshot_") and suffix == ".png":
-            return "态势截图"
+            return "snapshot"
         if suffix == ".csv":
-            return "误差CSV"
+            return "error_csv"
         if suffix == ".png" and "_planar_error_" in file_name:
+            return "error_plot"
+        return "other"
+
+    def _infer_export_type_label(self, path: Path) -> str:
+        type_key = self._infer_export_type_key(path)
+        if type_key == "snapshot":
+            return "态势截图"
+        if type_key == "error_csv":
+            return "误差CSV"
+        if type_key == "error_plot":
             return "误差曲线PNG"
-        if suffix == ".png":
-            return "PNG"
-        if suffix == ".json":
-            return "JSON"
-        if suffix == ".txt":
-            return "TXT"
-        return "文件"
+        return "其他文件"
 
     def on_export_index_double_clicked(self, row: int, _col: int) -> None:
         self.export_index_table.selectRow(row)
@@ -780,7 +852,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "关于",
-            "205_nav_ui 原型（第二十一步）\n\n"
+            "205_nav_ui 原型（第二十三步）\n\n"
             "当前功能：\n"
             "- UAV/UGV 不同图形显示\n"
             "- 平台状态统一dataclass（含在线与真值预留字段）\n"
@@ -789,7 +861,7 @@ class MainWindow(QMainWindow):
             "- 真值点/真值轨迹显示与误差可视化（当前+RMS）\n"
             "- 选中平台误差曲线面板\n"
             "- 误差CSV与误差曲线PNG导出\n"
-            "- 导出索引面板（最近导出 + 一键打开）\n"
+            "- 导出索引面板（最近导出 + 筛选 + 一键打开）\n"
             "- 平台列表联动选中与定位\n"
             "- 数据新鲜度告警（超时灰显）\n"
             "- 下线平台自动移除（图元/轨迹/列表）\n"
@@ -800,6 +872,7 @@ class MainWindow(QMainWindow):
             "- 支持链路掉帧仿真（告警联调）\n"
             "- 支持一键导出当前态势图截图\n"
             "- 左右分栏支持拖拽调宽\n"
+            "- 右侧功能按选项卡分类切换\n"
             "- 平台编号显示/隐藏\n"
             "- 跟随选中目标\n"
             "- 跟随时禁用手动拖拽\n"
