@@ -52,6 +52,8 @@ class RosBridgeAdapter(DataAdapter):
         self._platform_states: dict[str, PlatformState] = {}
         self._dirty_platform_ids: set[str] = set()
         self._mock_phase_by_id: dict[str, float] = {}
+        self._received_message_count = 0
+        self._last_message_monotonic_sec: float | None = None
 
     def connect(self) -> bool:
         if self._ros_client is not None:
@@ -87,14 +89,21 @@ class RosBridgeAdapter(DataAdapter):
 
     def get_status(self) -> AdapterStatus:
         mode = "live" if self._connected else "disconnected"
+        message_stats = self._build_message_stats()
         if self._ros_client is not None:
             message = self._ros_client.get_status_message()
             if self._mock_enabled:
                 message = f"{message}; mock stream active"
+            if message_stats:
+                message = f"{message}; {message_stats}"
         elif self._mock_enabled:
             message = "mock stream active" if self._connected else "mock stream idle"
+            if message_stats:
+                message = f"{message}; {message_stats}"
         else:
             message = "awaiting ROS2 subscriptions" if self._connected else "adapter idle"
+            if message_stats:
+                message = f"{message}; {message_stats}"
         return AdapterStatus(
             connected=self._connected,
             mode=mode,
@@ -117,6 +126,7 @@ class RosBridgeAdapter(DataAdapter):
         updated = apply_pose_payload(current, payload)
         self._platform_states[platform_id] = updated
         self._dirty_platform_ids.add(platform_id)
+        self._mark_message_received()
         return True
 
     def on_truth_topic(self, topic: str, payload: dict) -> bool:
@@ -127,6 +137,7 @@ class RosBridgeAdapter(DataAdapter):
         updated = apply_truth_payload(current, payload)
         self._platform_states[platform_id] = updated
         self._dirty_platform_ids.add(platform_id)
+        self._mark_message_received()
         return True
 
     def on_health_topic(self, topic: str, payload: dict) -> bool:
@@ -137,6 +148,7 @@ class RosBridgeAdapter(DataAdapter):
         updated = apply_health_payload(current, payload)
         self._platform_states[platform_id] = updated
         self._dirty_platform_ids.add(platform_id)
+        self._mark_message_received()
         return True
 
     def _apply_ros_inbound_message(self, message: RosInboundMessage) -> None:
@@ -176,6 +188,21 @@ class RosBridgeAdapter(DataAdapter):
             platform_id = str(raw_platform_id).strip()
             return platform_id or None
         return match.group(1)
+
+    def _mark_message_received(self) -> None:
+        self._received_message_count += 1
+        self._last_message_monotonic_sec = self._clock()
+
+    def _build_message_stats(self) -> str:
+        platform_count = len(self._platform_states)
+        if self._last_message_monotonic_sec is None:
+            freshness = "data=none"
+        else:
+            age_sec = max(0.0, self._clock() - self._last_message_monotonic_sec)
+            freshness = f"last={age_sec:.1f}s"
+        return (
+            f"platforms={platform_count}, msgs={self._received_message_count}, {freshness}"
+        )
 
     def _new_state(self, platform_id: str) -> PlatformState:
         platform_type = "UAV" if platform_id.upper().startswith("UAV") else "UGV"

@@ -118,3 +118,44 @@ def test_payload_from_ros_health_message_with_json() -> None:
     assert payload["link_state"] == "LOST"
     assert payload["nav_state"] == "DEGRADED"
     assert payload["timestamp"] == 9.0
+
+
+def test_payload_from_ros_odometry_like_message() -> None:
+    class Stamp:
+        sec = 3
+        nanosec = 0
+
+    class Header:
+        stamp = Stamp()
+
+    class Position:
+        x = 4.0
+        y = 5.0
+        z = 6.0
+
+    class PoseInner:
+        position = Position()
+
+    class Pose:
+        pose = PoseInner()
+
+    class Linear:
+        x = 0.3
+        y = 0.4
+        z = 0.0
+
+    class TwistInner:
+        linear = Linear()
+
+    class Twist:
+        twist = TwistInner()
+
+    class OdometryLike:
+        header = Header()
+        pose = Pose()
+        twist = Twist()
+
+    payload = payload_from_ros_pose_message(OdometryLike(), default_timestamp=0.0)
+    assert payload["x"] == 4.0 and payload["y"] == 5.0 and payload["z"] == 6.0
+    assert payload["vx"] == 0.3 and payload["vy"] == 0.4 and payload["vz"] == 0.0
+    assert payload["speed"] == 0.5

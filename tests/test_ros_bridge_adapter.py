@@ -117,3 +117,19 @@ def test_ros_bridge_adapter_accepts_payload_platform_id_when_topic_custom() -> N
     updates = adapter.poll()
     assert len(updates) == 1
     assert updates[0].id == "UAVX"
+
+
+def test_ros_bridge_adapter_status_contains_runtime_stats() -> None:
+    adapter = RosBridgeAdapter()
+    assert adapter.connect()
+    initial = adapter.get_status().message
+    assert "platforms=0" in initial
+    assert "msgs=0" in initial
+    adapter.on_pose_topic(
+        "/swarm/UAV1/nav/pose",
+        {"x": 1.0, "y": 2.0, "z": 3.0, "timestamp": 1.0, "type": "UAV"},
+    )
+    _ = adapter.poll()
+    message = adapter.get_status().message
+    assert "platforms=1" in message
+    assert "msgs=1" in message

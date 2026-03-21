@@ -82,6 +82,13 @@ def test_alert_filter_ack_and_clear_flow(window: MainWindow) -> None:
     assert window.alert_table.rowCount() == 0
 
 
+def test_source_runtime_label_updates(window: MainWindow) -> None:
+    window.on_timer_update()
+    text = window.source_status_label.text()
+    assert text.startswith("数据源:")
+    assert "connected" in text or "not connected" in text
+
+
 def test_replay_mode_linkage(window: MainWindow, tmp_path: Path) -> None:
     replay_file = tmp_path / "exports" / "recordings" / "integration_replay.jsonl"
     replay_file.parent.mkdir(parents=True, exist_ok=True)

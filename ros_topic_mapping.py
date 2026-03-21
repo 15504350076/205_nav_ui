@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -69,6 +70,18 @@ def _read_nested_attr(raw: Any, path: tuple[str, ...], default: Any = None) -> A
     return current if current is not None else default
 
 
+def _read_first_nested_attr(
+    raw: Any,
+    paths: tuple[tuple[str, ...], ...],
+    default: Any = None,
+) -> Any:
+    for path in paths:
+        value = _read_nested_attr(raw, path, None)
+        if value is not None:
+            return value
+    return default
+
+
 def _stamp_to_seconds(stamp_like: Any, default: float) -> float:
     if stamp_like is None:
         return default
@@ -94,17 +107,55 @@ def payload_from_ros_pose_message(
     platform_type: str | None = None,
     nav_state: str | None = None,
 ) -> dict[str, Any]:
-    """将 PoseStamped 形态消息规范化为内部 pose payload."""
+    """将 PoseStamped/Odometry 形态消息规范化为内部 pose payload."""
 
-    x = _as_float(_read_nested_attr(message, ("pose", "position", "x"), None), 0.0)
-    y = _as_float(_read_nested_attr(message, ("pose", "position", "y"), None), 0.0)
-    z = _as_float(_read_nested_attr(message, ("pose", "position", "z"), None), 0.0)
+    x = _as_float(
+        _read_first_nested_attr(
+            message,
+            (
+                ("pose", "position", "x"),
+                ("pose", "pose", "position", "x"),
+            ),
+            None,
+        ),
+        0.0,
+    )
+    y = _as_float(
+        _read_first_nested_attr(
+            message,
+            (
+                ("pose", "position", "y"),
+                ("pose", "pose", "position", "y"),
+            ),
+            None,
+        ),
+        0.0,
+    )
+    z = _as_float(
+        _read_first_nested_attr(
+            message,
+            (
+                ("pose", "position", "z"),
+                ("pose", "pose", "position", "z"),
+            ),
+            None,
+        ),
+        0.0,
+    )
+    vx = _as_float(_read_nested_attr(message, ("twist", "twist", "linear", "x"), None), 0.0)
+    vy = _as_float(_read_nested_attr(message, ("twist", "twist", "linear", "y"), None), 0.0)
+    vz = _as_float(_read_nested_attr(message, ("twist", "twist", "linear", "z"), None), 0.0)
+    speed = math.sqrt(vx * vx + vy * vy + vz * vz)
     stamp_like = _read_nested_attr(message, ("header", "stamp"), None)
     timestamp = _stamp_to_seconds(stamp_like, default_timestamp)
     payload: dict[str, Any] = {
         "x": x,
         "y": y,
         "z": z,
+        "vx": vx,
+        "vy": vy,
+        "vz": vz,
+        "speed": speed,
         "timestamp": timestamp,
     }
     if platform_type:

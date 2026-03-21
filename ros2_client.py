@@ -150,19 +150,19 @@ class RclpyRos2Client(RosIngressClient):
             return True
 
         rclpy = self._runtime["rclpy"]
-        pose_msg_type = self._runtime["PoseStamped"]
         health_msg_type = self._runtime["String"]
 
         if not rclpy.ok():
             rclpy.init(args=None)
         self._node = rclpy.create_node(self.node_name)
+        topic_types_by_name = self._load_topic_types_by_name()
         self._subscriptions = []
         self._subscription_keys.clear()
         self._subscribed_platform_ids.clear()
         for platform_id in self.platform_ids:
             self._bind_platform_channels(
                 platform_id,
-                pose_msg_type=pose_msg_type,
+                topic_types_by_name=topic_types_by_name,
                 health_msg_type=health_msg_type,
             )
         self._refresh_discovered_subscriptions(force=True)
@@ -234,15 +234,17 @@ class RclpyRos2Client(RosIngressClient):
         self,
         platform_id: str,
         *,
-        pose_msg_type: Any,
+        topic_types_by_name: dict[str, list[str]],
         health_msg_type: Any,
     ) -> None:
         bindings = topic_bindings_for_platform(platform_id, convention=self.topic_convention)
+        pose_topic_types = topic_types_by_name.get(bindings.pose_topic)
+        truth_topic_types = topic_types_by_name.get(bindings.truth_topic)
         self._bind_subscription(
             platform_id=platform_id,
             kind="pose",
             topic=bindings.pose_topic,
-            msg_type=pose_msg_type,
+            msg_type=self._select_pose_msg_type(pose_topic_types),
             callback=lambda msg, topic=bindings.pose_topic, pid=platform_id: self._on_pose(
                 pid, topic, msg
             ),
@@ -251,7 +253,7 @@ class RclpyRos2Client(RosIngressClient):
             platform_id=platform_id,
             kind="truth",
             topic=bindings.truth_topic,
-            msg_type=pose_msg_type,
+            msg_type=self._select_pose_msg_type(truth_topic_types),
             callback=lambda msg, topic=bindings.truth_topic, pid=platform_id: self._on_truth(
                 pid, topic, msg
             ),
@@ -306,7 +308,6 @@ class RclpyRos2Client(RosIngressClient):
         except Exception:
             return
 
-        pose_msg_type = self._runtime["PoseStamped"]
         health_msg_type = self._runtime["String"]
 
         for row in topic_rows:
@@ -336,7 +337,7 @@ class RclpyRos2Client(RosIngressClient):
                     platform_id=platform_id,
                     kind=kind,
                     topic=topic,
-                    msg_type=pose_msg_type,
+                    msg_type=self._select_pose_msg_type(row[1] if len(row) > 1 else None),
                     callback=callback,
                 )
             else:
@@ -347,7 +348,7 @@ class RclpyRos2Client(RosIngressClient):
                     platform_id=platform_id,
                     kind=kind,
                     topic=topic,
-                    msg_type=pose_msg_type,
+                    msg_type=self._select_pose_msg_type(row[1] if len(row) > 1 else None),
                     callback=callback,
                 )
 
@@ -364,6 +365,38 @@ class RclpyRos2Client(RosIngressClient):
                 continue
             return kind, platform_id
         return None
+
+    def _load_topic_types_by_name(self) -> dict[str, list[str]]:
+        if self._node is None:
+            return {}
+        getter = getattr(self._node, "get_topic_names_and_types", None)
+        if getter is None:
+            return {}
+        try:
+            topic_rows = getter()
+        except Exception:
+            return {}
+        mapping: dict[str, list[str]] = {}
+        for row in topic_rows:
+            if not isinstance(row, (tuple, list)) or not row:
+                continue
+            topic = str(row[0])
+            type_names = row[1] if len(row) > 1 else []
+            normalized_types = [str(type_name) for type_name in type_names]
+            mapping[topic] = normalized_types
+        return mapping
+
+    def _select_pose_msg_type(self, topic_type_names: list[str] | tuple[str, ...] | None) -> Any:
+        pose_stamped_type = self._runtime["PoseStamped"] if self._runtime is not None else None
+        odometry_type = self._runtime.get("Odometry") if self._runtime is not None else None
+        if not topic_type_names:
+            return pose_stamped_type
+        normalized = {str(name) for name in topic_type_names}
+        if "nav_msgs/msg/Odometry" in normalized and odometry_type is not None:
+            return odometry_type
+        if "geometry_msgs/msg/PoseStamped" in normalized:
+            return pose_stamped_type
+        return pose_stamped_type
 
     @staticmethod
     def _template_to_topic_regex(template: str) -> re.Pattern[str] | None:
@@ -395,10 +428,15 @@ class RclpyRos2Client(RosIngressClient):
 def _load_ros2_runtime() -> dict[str, Any]:
     import rclpy
     from geometry_msgs.msg import PoseStamped
+    try:
+        from nav_msgs.msg import Odometry
+    except Exception:
+        Odometry = None
     from std_msgs.msg import String
 
     return {
         "rclpy": rclpy,
         "PoseStamped": PoseStamped,
+        "Odometry": Odometry,
         "String": String,
     }

@@ -566,6 +566,8 @@ class MainWindow(QMainWindow):
         replay_layout = QVBoxLayout(replay_group)
         self.replay_status_label = QLabel("模式: 实时")
         replay_layout.addWidget(self.replay_status_label)
+        self.source_status_label = QLabel("数据源: --")
+        replay_layout.addWidget(self.source_status_label)
 
         self.replay_file_label = QLabel("文件: --")
         replay_layout.addWidget(self.replay_file_label)
@@ -1031,6 +1033,7 @@ class MainWindow(QMainWindow):
     def _load_initial_data(self) -> None:
         if not self.data_source.connect():
             self.status_bar.showMessage("数据源连接失败")
+            self._refresh_data_source_runtime_label()
             return
         initial_data = self.data_source.poll()
         removed_ids = self.platform_manager.apply_updates(initial_data)
@@ -1048,14 +1051,17 @@ class MainWindow(QMainWindow):
         status = self.data_source.get_status()
         if status.connected:
             self.status_bar.showMessage(f"数据源已连接: {status.source_name} ({status.mode})")
+        self._refresh_data_source_runtime_label()
 
     def on_timer_update(self) -> None:
         if self.data_source.is_replay_mode:
             self._advance_replay_frame(status_prefix="回放")
+            self._refresh_data_source_runtime_label()
             return
 
         platform_data = self.data_source.next_frame()
         self._apply_frame_update(platform_data)
+        self._refresh_data_source_runtime_label()
 
     def _apply_frame_update(self, platform_data: list[PlatformState], status_prefix: str = "") -> None:
         removed_ids = self.platform_manager.apply_updates(platform_data)
@@ -1093,6 +1099,15 @@ class MainWindow(QMainWindow):
         if status_prefix:
             message = f"{status_prefix} | {message}"
         self.status_bar.showMessage(message)
+
+    def _refresh_data_source_runtime_label(self) -> None:
+        if not hasattr(self, "source_status_label"):
+            return
+        status = self.data_source.get_status()
+        detail = status.message.strip() if status.message else "no details"
+        self.source_status_label.setText(
+            f"数据源: {status.source_name} | {status.mode} | {detail}"
+        )
 
     def on_platform_selected(self, platform_info: PlatformState, status_prefix: str = "") -> None:
         self.id_label.setText(str(platform_info.id))

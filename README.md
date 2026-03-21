@@ -182,6 +182,9 @@ python3 app.py --source ros2 --ros2-platform-ids UAV1,UAV2,UGV1
 
 # 关闭自动发现，仅按手工列表订阅
 python3 app.py --source ros2 --ros2-platform-ids UAV1,UGV1 --ros2-no-auto-discovery
+
+# 调整自动发现扫描周期
+python3 app.py --source ros2 --ros2-discovery-interval 0.5
 ```
 
 ### 4.1 ROS2 最小接入约定（单平台闭环）
@@ -193,6 +196,11 @@ python3 app.py --source ros2 --ros2-platform-ids UAV1,UGV1 --ros2-no-auto-discov
 - 估计位姿：`/swarm/{platform_id}/nav/pose`（建议 `geometry_msgs/PoseStamped`）
 - 真值位姿：`/swarm/{platform_id}/truth/pose`（建议 `geometry_msgs/PoseStamped`）
 - 健康状态：`/swarm/{platform_id}/health`（建议 `std_msgs/String`，JSON 字符串）
+
+说明：
+
+- `pose/truth` 同时兼容 `geometry_msgs/PoseStamped` 与 `nav_msgs/Odometry`
+- 界面“录制与回放”区域会显示数据源运行状态（订阅平台数、消息计数、最近数据时延）
 
 内部字段映射：
 
