@@ -89,6 +89,53 @@ def test_source_runtime_label_updates(window: MainWindow) -> None:
     assert "connected" in text or "not connected" in text
 
 
+def test_motion_monitor_detects_dropped_pose(qapp: QApplication, tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    del qapp
+    monkeypatch.chdir(tmp_path)
+
+    class RosLikeSource:
+        def __init__(self) -> None:
+            self._frame_count = 0
+            self._counter_query_count = 0
+            self._initial = [
+                PlatformState(
+                    id="UAV1",
+                    type="UAV",
+                    x=1.0,
+                    y=2.0,
+                    z=0.0,
+                    timestamp=1.0,
+                    is_online=True,
+                )
+            ]
+
+        def get_initial_data(self) -> list[PlatformState]:
+            self._frame_count += 1
+            return list(self._initial)
+
+        def get_runtime_counters(self) -> dict[str, int | float]:
+            self._counter_query_count += 1
+            if self._counter_query_count <= 1:
+                return {"raw_pose": 1, "accepted": 1, "drop": 0, "invalid_ts": 0}
+            return {"raw_pose": 2, "accepted": 1, "drop": 1, "invalid_ts": 1}
+
+        def get_next_frame(self) -> list[PlatformState]:
+            self._frame_count += 1
+            return []
+
+    window = MainWindow(data_source=RosLikeSource())
+    window.timer.stop()
+    try:
+        window.on_timer_update()
+        text = window.motion_monitor_label.text()
+        assert "位置监视[UAV1]" in text
+        assert "[ERR]" in text
+        assert "时间戳回退被丢弃" in text
+        assert "#b42318" in window.motion_monitor_label.styleSheet()
+    finally:
+        window.close()
+
+
 def test_replay_mode_linkage(window: MainWindow, tmp_path: Path) -> None:
     replay_file = tmp_path / "exports" / "recordings" / "integration_replay.jsonl"
     replay_file.parent.mkdir(parents=True, exist_ok=True)

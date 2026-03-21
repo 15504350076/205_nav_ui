@@ -153,6 +153,10 @@ class MainWindow(QMainWindow):
         self._ui_tick_count = 0
         self._ui_tick_window_start_sec = time.monotonic()
         self._ui_tick_rate_hz = 0.0
+        self.motion_monitor_platform_id = "UAV1"
+        self._motion_monitor_prev_xy_by_id: dict[str, tuple[float, float]] = {}
+        self._motion_monitor_prev_counter_snapshot: dict[str, float] = {}
+        self._motion_monitor_no_pose_streak = 0
         self.packet_loss_controls_supported = all(
             live_source is not None and hasattr(live_source, name)
             for name in ("set_packet_loss_enabled", "set_packet_loss_rate")
@@ -163,6 +167,11 @@ class MainWindow(QMainWindow):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("未选中平台")
+        self.motion_monitor_label = QLabel(
+            f"位置监视[{self.motion_monitor_platform_id}] Δx=-- Δy=-- | 等待数据"
+        )
+        self.motion_monitor_label.setStyleSheet("QLabel { color: #4b5563; font-weight: 600; }")
+        self.status_bar.addPermanentWidget(self.motion_monitor_label)
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.on_timer_update)
@@ -1123,6 +1132,118 @@ class MainWindow(QMainWindow):
         self.source_status_label.setText(
             f"数据源: {status.source_name} | {status.mode} | {detail} | {ui_summary}"
         )
+        self._refresh_motion_monitor_label()
+
+    def _get_runtime_counter_snapshot(self) -> dict[str, float]:
+        getter = getattr(self.data_source, "get_runtime_counters", None)
+        if not callable(getter):
+            return {}
+        raw_snapshot = getter()
+        if not isinstance(raw_snapshot, dict):
+            return {}
+        snapshot: dict[str, float] = {}
+        for key, value in raw_snapshot.items():
+            try:
+                snapshot[str(key)] = float(value)
+            except (TypeError, ValueError):
+                continue
+        return snapshot
+
+    def _refresh_motion_monitor_label(self) -> None:
+        if not hasattr(self, "motion_monitor_label"):
+            return
+        platform_id = self.motion_monitor_platform_id
+        state = self.platform_manager.platform_states.get(platform_id)
+        dx_text = "--"
+        dy_text = "--"
+        has_position_delta = False
+        dx_value = 0.0
+        dy_value = 0.0
+        if state is not None:
+            prev_xy = self._motion_monitor_prev_xy_by_id.get(platform_id)
+            if prev_xy is not None:
+                dx_value = state.x - prev_xy[0]
+                dy_value = state.y - prev_xy[1]
+                dx_text = f"{dx_value:+.3f}"
+                dy_text = f"{dy_value:+.3f}"
+                has_position_delta = True
+            self._motion_monitor_prev_xy_by_id[platform_id] = (state.x, state.y)
+        else:
+            self._motion_monitor_prev_xy_by_id.pop(platform_id, None)
+
+        counter_snapshot = self._get_runtime_counter_snapshot()
+        counter_delta: dict[str, float] = {}
+        if self._motion_monitor_prev_counter_snapshot:
+            for key, value in counter_snapshot.items():
+                previous_value = self._motion_monitor_prev_counter_snapshot.get(key)
+                if previous_value is None:
+                    continue
+                counter_delta[key] = value - previous_value
+        self._motion_monitor_prev_counter_snapshot = counter_snapshot
+
+        pose_raw_delta = counter_delta.get("raw_pose", 0.0)
+        accepted_delta = counter_delta.get("accepted", 0.0)
+        drop_delta = counter_delta.get("drop", 0.0)
+        invalid_ts_delta = counter_delta.get("invalid_ts", 0.0)
+        pose_age_sec = counter_snapshot.get("raw_last_pose_age_sec")
+        motion_hint = "等待计数初始化"
+        monitor_level = "neutral"
+        if not counter_snapshot:
+            motion_hint = "当前源无桥接计数"
+            monitor_level = "neutral"
+        elif pose_raw_delta <= 0.0:
+            self._motion_monitor_no_pose_streak += 1
+            if (
+                isinstance(pose_age_sec, float)
+                and pose_age_sec >= 0.0
+                and pose_age_sec <= 0.35
+            ):
+                motion_hint = "最近有新坐标（采样窗口内无新包）"
+                monitor_level = "ok"
+            elif self._motion_monitor_no_pose_streak < 3:
+                motion_hint = "坐标更新间隔中"
+                monitor_level = "neutral"
+            else:
+                motion_hint = "未收到新坐标"
+                monitor_level = "warn"
+        elif accepted_delta <= 0.0:
+            self._motion_monitor_no_pose_streak = 0
+            if invalid_ts_delta > 0.0:
+                motion_hint = f"收到了但时间戳回退被丢弃({int(invalid_ts_delta)})"
+                monitor_level = "error"
+            elif drop_delta > 0.0:
+                motion_hint = f"收到了但被丢弃({int(drop_delta)})"
+                monitor_level = "error"
+            else:
+                motion_hint = "收到了但未入库"
+                monitor_level = "warn"
+        elif has_position_delta and abs(dx_value) <= 1e-6 and abs(dy_value) <= 1e-6:
+            self._motion_monitor_no_pose_streak = 0
+            motion_hint = "已入库，坐标无变化"
+            monitor_level = "warn"
+        else:
+            self._motion_monitor_no_pose_streak = 0
+            motion_hint = "已入库并更新"
+            monitor_level = "ok"
+
+        if state is None:
+            motion_hint = f"平台[{platform_id}]未激活"
+            monitor_level = "neutral"
+
+        level_label, style = self._motion_monitor_style_for_level(monitor_level)
+        self.motion_monitor_label.setStyleSheet(style)
+        self.motion_monitor_label.setText(
+            f"位置监视[{platform_id}] [{level_label}] Δx={dx_text} Δy={dy_text} | {motion_hint}"
+        )
+
+    def _motion_monitor_style_for_level(self, level: str) -> tuple[str, str]:
+        if level == "ok":
+            return ("OK", "QLabel { color: #146c2e; font-weight: 600; }")
+        if level == "warn":
+            return ("WARN", "QLabel { color: #9a6700; font-weight: 600; }")
+        if level == "error":
+            return ("ERR", "QLabel { color: #b42318; font-weight: 600; }")
+        return ("INIT", "QLabel { color: #4b5563; font-weight: 600; }")
 
     def _mark_ui_tick(self) -> None:
         self._ui_tick_count += 1
@@ -2016,6 +2137,9 @@ class MainWindow(QMainWindow):
         self.map_view.set_stale_platforms(set())
         self.evaluation_service.reset()
         self.runtime_alert_engine.reset()
+        self._motion_monitor_prev_xy_by_id.clear()
+        self._motion_monitor_prev_counter_snapshot = {}
+        self._motion_monitor_no_pose_streak = 0
 
     def _raise_runtime_alerts(
         self,

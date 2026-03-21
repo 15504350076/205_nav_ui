@@ -83,6 +83,18 @@ def test_ros_bridge_adapter_with_ingress_client_closed_loop() -> None:
     assert state.link_state == "OK"
 
 
+def test_ros_bridge_adapter_runtime_counters_include_ingress_metrics() -> None:
+    ingress = InMemoryRos2Client()
+    adapter = RosBridgeAdapter(ros_client=ingress)
+    assert adapter.connect()
+    ingress.push("pose", "/swarm/UAV1/nav/pose", {"x": 1.0, "y": 2.0, "z": 3.0, "timestamp": 1.0})
+    _ = adapter.poll()
+    counters = adapter.get_runtime_counters()
+    assert int(counters["recv"]) == 1
+    assert int(counters["accepted"]) == 1
+    assert "raw_total" in counters
+
+
 def test_ros_bridge_adapter_with_unavailable_client() -> None:
     class UnavailableClient:
         def connect(self) -> bool:
@@ -260,3 +272,20 @@ def test_ros_bridge_adapter_pose_only_without_truth_health() -> None:
     assert len(updates) == 1
     assert updates[0].id == "UAV1"
     assert updates[0].truth_x is None
+
+
+def test_ros_bridge_adapter_health_without_timestamp_does_not_trigger_rollback() -> None:
+    adapter = RosBridgeAdapter()
+    assert adapter.connect()
+    assert adapter.on_pose_topic(
+        "/swarm/UAV1/nav/pose",
+        {"x": 10.0, "y": 20.0, "z": 30.0, "timestamp": 10.0},
+    )
+    _ = adapter.poll()
+    assert adapter.on_health_topic(
+        "/swarm/UAV1/health",
+        {"is_online": True, "link_state": "OK", "nav_state": "TRACKING", "timestamp": None},
+    )
+    _ = adapter.poll()
+    message = adapter.get_status().message
+    assert "invalid_ts=0" in message

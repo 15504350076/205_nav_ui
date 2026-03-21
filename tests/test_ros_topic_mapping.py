@@ -165,7 +165,19 @@ def test_payload_from_ros_health_message_with_garbled_or_empty_text() -> None:
     payload = payload_from_ros_health_message("%%%乱码%%%")
     assert payload["link_state"] == "UNKNOWN"
     assert payload["is_online"] is True
+    assert payload["timestamp"] is None
 
     payload_empty = payload_from_ros_health_message("")
     assert payload_empty["link_state"] == "UNKNOWN"
     assert payload_empty["is_online"] is True
+    assert payload_empty["timestamp"] is None
+
+
+def test_payload_from_ros_health_message_without_timestamp_keeps_none() -> None:
+    class StringLike:
+        data = '{"is_online": true, "link_state": "OK", "nav_state": "TRACKING"}'
+
+    payload = payload_from_ros_health_message(StringLike(), default_timestamp=123.0)
+    assert payload["is_online"] is True
+    assert payload["link_state"] == "OK"
+    assert payload["timestamp"] is None

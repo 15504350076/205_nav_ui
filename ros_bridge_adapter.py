@@ -146,6 +146,35 @@ class RosBridgeAdapter(DataAdapter):
     def get_debug_summary_text(self) -> str:
         return self._build_debug_summary()
 
+    def get_runtime_counters(self) -> dict[str, int | float]:
+        counters: dict[str, int | float] = {
+            "recv": self._received_message_count,
+            "accepted": self._accepted_state_update_count,
+            "drop": self._dropped_message_count,
+            "invalid_ts": self._invalid_timestamp_count,
+            "degraded": self._degraded_field_count,
+        }
+        if self._ros_client is None or not hasattr(self._ros_client, "get_runtime_metrics"):
+            return counters
+        metrics = self._ros_client.get_runtime_metrics()
+        for key in (
+            "raw_total",
+            "raw_pose",
+            "raw_truth",
+            "raw_health",
+            "raw_last_pose_age_sec",
+            "raw_last_truth_age_sec",
+            "raw_last_health_age_sec",
+            "parse_error",
+            "unsupported_topic_type",
+            "discovery_rejected_platform",
+            "discovery_platforms",
+        ):
+            value = metrics.get(key)
+            if isinstance(value, (int, float)):
+                counters[key] = value
+        return counters
+
     @property
     def ros_runtime_available(self) -> bool:
         if self._ros_client is None:

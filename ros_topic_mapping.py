@@ -204,7 +204,7 @@ def payload_from_ros_health_message(
                     not in {HEALTH_STATE_LOST, HEALTH_STATE_OFFLINE, HEALTH_STATE_DISCONNECTED},
                     "link_state": normalized,
                     "nav_state": None,
-                    "timestamp": default_timestamp,
+                    "timestamp": None,
                 }
             if isinstance(raw_json, dict):
                 normalized_state = normalize_health_state(_as_str(raw_json.get("link_state"), None))
@@ -217,17 +217,22 @@ def payload_from_ros_health_message(
                     }
                 else:
                     resolved_is_online = bool(is_online_value)
+                raw_timestamp = raw_json.get("timestamp")
                 return {
                     "is_online": resolved_is_online,
                     "link_state": normalized_state,
                     "nav_state": _as_str(raw_json.get("nav_state"), None),
-                    "timestamp": _as_float(raw_json.get("timestamp"), default_timestamp),
+                    "timestamp": (
+                        _as_float(raw_timestamp, default_timestamp)
+                        if raw_timestamp is not None
+                        else None
+                    ),
                 }
     return {
         "is_online": True,
         "link_state": HEALTH_STATE_UNKNOWN,
         "nav_state": None,
-        "timestamp": default_timestamp,
+        "timestamp": None,
     }
 
 
