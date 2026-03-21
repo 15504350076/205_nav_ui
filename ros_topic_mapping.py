@@ -6,15 +6,27 @@ from dataclasses import dataclass
 from typing import Any
 
 from platform_state import PlatformState
+from ros_protocol import (
+    DEFAULT_HEALTH_TOPIC_TEMPLATE,
+    DEFAULT_POSE_TOPIC_TEMPLATE,
+    DEFAULT_TRUTH_TOPIC_TEMPLATE,
+    HEALTH_STATE_DISCONNECTED,
+    HEALTH_STATE_LOST,
+    HEALTH_STATE_OFFLINE,
+    HEALTH_STATE_UNKNOWN,
+    POSITION_UNIT,
+    VELOCITY_UNIT,
+    normalize_health_state,
+)
 
 
 @dataclass(slots=True, frozen=True)
 class RosTopicConvention:
     """ROS2 Topic 到内部状态字段的约定。"""
 
-    pose_topic: str = "/swarm/{platform_id}/nav/pose"
-    truth_topic: str = "/swarm/{platform_id}/truth/pose"
-    health_topic: str = "/swarm/{platform_id}/health"
+    pose_topic: str = DEFAULT_POSE_TOPIC_TEMPLATE
+    truth_topic: str = DEFAULT_TRUTH_TOPIC_TEMPLATE
+    health_topic: str = DEFAULT_HEALTH_TOPIC_TEMPLATE
 
 
 @dataclass(slots=True, frozen=True)
@@ -24,6 +36,8 @@ class RosTopicPayloadContract:
     pose_fields: tuple[str, ...] = ("x", "y", "z", "timestamp")
     truth_fields: tuple[str, ...] = ("x", "y", "z", "timestamp")
     health_fields: tuple[str, ...] = ("is_online", "link_state", "nav_state", "timestamp")
+    position_unit: str = POSITION_UNIT
+    velocity_unit: str = VELOCITY_UNIT
 
 
 @dataclass(slots=True, frozen=True)
@@ -184,23 +198,34 @@ def payload_from_ros_health_message(
             try:
                 raw_json = json.loads(text)
             except json.JSONDecodeError:
-                normalized = text.upper()
+                normalized = normalize_health_state(text)
                 return {
-                    "is_online": normalized not in {"LOST", "OFFLINE", "DISCONNECTED"},
-                    "link_state": text,
+                    "is_online": normalized
+                    not in {HEALTH_STATE_LOST, HEALTH_STATE_OFFLINE, HEALTH_STATE_DISCONNECTED},
+                    "link_state": normalized,
                     "nav_state": None,
                     "timestamp": default_timestamp,
                 }
             if isinstance(raw_json, dict):
+                normalized_state = normalize_health_state(_as_str(raw_json.get("link_state"), None))
+                is_online_value = raw_json.get("is_online")
+                if is_online_value is None:
+                    resolved_is_online = normalized_state not in {
+                        HEALTH_STATE_LOST,
+                        HEALTH_STATE_OFFLINE,
+                        HEALTH_STATE_DISCONNECTED,
+                    }
+                else:
+                    resolved_is_online = bool(is_online_value)
                 return {
-                    "is_online": bool(raw_json.get("is_online", True)),
-                    "link_state": _as_str(raw_json.get("link_state"), "OK"),
+                    "is_online": resolved_is_online,
+                    "link_state": normalized_state,
                     "nav_state": _as_str(raw_json.get("nav_state"), None),
                     "timestamp": _as_float(raw_json.get("timestamp"), default_timestamp),
                 }
     return {
         "is_online": True,
-        "link_state": "UNKNOWN",
+        "link_state": HEALTH_STATE_UNKNOWN,
         "nav_state": None,
         "timestamp": default_timestamp,
     }

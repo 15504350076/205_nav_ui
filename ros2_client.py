@@ -6,6 +6,7 @@ import re
 import time
 from typing import Any, Callable, Literal, Protocol
 
+from ros_protocol import DISCOVERY_MAX_PLATFORMS_DEFAULT
 from ros_topic_mapping import (
     RosTopicConvention,
     payload_from_ros_health_message,
@@ -42,6 +43,9 @@ class RosIngressClient(Protocol):
     def get_status_message(self) -> str:
         ...
 
+    def get_runtime_metrics(self) -> dict[str, int | float]:
+        ...
+
 
 class NullRos2Client(RosIngressClient):
     """ROS2 不可用时的占位客户端。"""
@@ -63,6 +67,14 @@ class NullRos2Client(RosIngressClient):
 
     def get_status_message(self) -> str:
         return self._reason
+
+    def get_runtime_metrics(self) -> dict[str, int | float]:
+        return {
+            "raw_total": 0,
+            "parse_error": 0,
+            "unsupported_topic_type": 0,
+            "discovery_rejected_platform": 0,
+        }
 
 
 class InMemoryRos2Client(RosIngressClient):
@@ -93,6 +105,14 @@ class InMemoryRos2Client(RosIngressClient):
     def get_status_message(self) -> str:
         return "in-memory ROS2 client"
 
+    def get_runtime_metrics(self) -> dict[str, int | float]:
+        return {
+            "raw_total": len(self._queue),
+            "parse_error": 0,
+            "unsupported_topic_type": 0,
+            "discovery_rejected_platform": 0,
+        }
+
     def push(self, kind: RosInboundKind, topic: str, payload: dict[str, Any]) -> None:
         self._queue.append(RosInboundMessage(kind=kind, topic=topic, payload=dict(payload)))
 
@@ -110,17 +130,19 @@ class RclpyRos2Client(RosIngressClient):
         qos_depth: int = 10,
         auto_discovery: bool = True,
         discovery_interval_sec: float = 1.0,
+        max_discovered_platforms: int = DISCOVERY_MAX_PLATFORMS_DEFAULT,
         clock: Callable[[], float] | None = None,
         runtime_loader: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         resolved_platform_ids = self._resolve_platform_ids(platform_id, platform_ids)
         self.platform_ids = tuple(resolved_platform_ids)
-        self.platform_id = self.platform_ids[0]
+        self.platform_id = self.platform_ids[0] if self.platform_ids else "UAV1"
         self.topic_convention = topic_convention or RosTopicConvention()
         self.node_name = node_name
         self.qos_depth = max(1, int(qos_depth))
         self.auto_discovery = auto_discovery
         self.discovery_interval_sec = max(0.2, float(discovery_interval_sec))
+        self.max_discovered_platforms = max(1, int(max_discovered_platforms))
         self._clock = clock or time.time
         self._queue: deque[RosInboundMessage] = deque()
         self._connected = False
@@ -135,6 +157,19 @@ class RclpyRos2Client(RosIngressClient):
             "truth": self._template_to_topic_regex(self.topic_convention.truth_topic),
             "health": self._template_to_topic_regex(self.topic_convention.health_topic),
         }
+        self._raw_message_count_by_kind: dict[RosInboundKind, int] = {
+            "pose": 0,
+            "truth": 0,
+            "health": 0,
+        }
+        self._last_message_sec_by_kind: dict[RosInboundKind, float | None] = {
+            "pose": None,
+            "truth": None,
+            "health": None,
+        }
+        self._parse_error_count = 0
+        self._unsupported_topic_type_count = 0
+        self._discovery_rejected_platform_count = 0
 
         self._runtime_loader = runtime_loader or _load_ros2_runtime
         self._runtime: dict[str, Any] | None = None
@@ -204,30 +239,72 @@ class RclpyRos2Client(RosIngressClient):
             return f"subscribed pose/truth/health for [{target}]{discovery_suffix}"
         return f"ROS2 runtime ready for [{target}]{discovery_suffix}"
 
+    def get_runtime_metrics(self) -> dict[str, int | float]:
+        now = self._clock()
+
+        def _age(kind: RosInboundKind) -> float:
+            ts = self._last_message_sec_by_kind.get(kind)
+            if ts is None:
+                return -1.0
+            return max(0.0, now - ts)
+
+        raw_total = sum(self._raw_message_count_by_kind.values())
+        return {
+            "raw_total": raw_total,
+            "raw_pose": self._raw_message_count_by_kind["pose"],
+            "raw_truth": self._raw_message_count_by_kind["truth"],
+            "raw_health": self._raw_message_count_by_kind["health"],
+            "raw_last_pose_age_sec": _age("pose"),
+            "raw_last_truth_age_sec": _age("truth"),
+            "raw_last_health_age_sec": _age("health"),
+            "parse_error": self._parse_error_count,
+            "unsupported_topic_type": self._unsupported_topic_type_count,
+            "discovery_rejected_platform": self._discovery_rejected_platform_count,
+            "discovery_platforms": len(self._subscribed_platform_ids),
+        }
+
     def _on_pose(self, platform_id: str, topic: str, message: Any) -> None:
-        payload = payload_from_ros_pose_message(
-            message,
-            default_timestamp=self._clock(),
-            platform_type="UAV" if platform_id.upper().startswith("UAV") else "UGV",
-            nav_state="TRACKING",
-        )
+        try:
+            payload = payload_from_ros_pose_message(
+                message,
+                default_timestamp=self._clock(),
+                platform_type="UAV" if platform_id.upper().startswith("UAV") else "UGV",
+                nav_state="TRACKING",
+            )
+        except Exception:
+            self._parse_error_count += 1
+            return
         payload["platform_id"] = platform_id
+        self._raw_message_count_by_kind["pose"] += 1
+        self._last_message_sec_by_kind["pose"] = self._clock()
         self._queue.append(RosInboundMessage(kind="pose", topic=topic, payload=payload))
 
     def _on_truth(self, platform_id: str, topic: str, message: Any) -> None:
-        payload = payload_from_ros_pose_message(
-            message,
-            default_timestamp=self._clock(),
-        )
+        try:
+            payload = payload_from_ros_pose_message(
+                message,
+                default_timestamp=self._clock(),
+            )
+        except Exception:
+            self._parse_error_count += 1
+            return
         payload["platform_id"] = platform_id
+        self._raw_message_count_by_kind["truth"] += 1
+        self._last_message_sec_by_kind["truth"] = self._clock()
         self._queue.append(RosInboundMessage(kind="truth", topic=topic, payload=payload))
 
     def _on_health(self, platform_id: str, topic: str, message: Any) -> None:
-        payload = payload_from_ros_health_message(
-            message,
-            default_timestamp=self._clock(),
-        )
+        try:
+            payload = payload_from_ros_health_message(
+                message,
+                default_timestamp=self._clock(),
+            )
+        except Exception:
+            self._parse_error_count += 1
+            return
         payload["platform_id"] = platform_id
+        self._raw_message_count_by_kind["health"] += 1
+        self._last_message_sec_by_kind["health"] = self._clock()
         self._queue.append(RosInboundMessage(kind="health", topic=topic, payload=payload))
 
     def _bind_platform_channels(
@@ -318,6 +395,12 @@ class RclpyRos2Client(RosIngressClient):
             if match_result is None:
                 continue
             kind, platform_id = match_result
+            if (
+                platform_id not in self._subscribed_platform_ids
+                and len(self._subscribed_platform_ids) >= self.max_discovered_platforms
+            ):
+                self._discovery_rejected_platform_count += 1
+                continue
             if kind == "health":
                 callback = (
                     lambda msg, t=topic, pid=platform_id: self._on_health(pid, t, msg)
@@ -396,6 +479,7 @@ class RclpyRos2Client(RosIngressClient):
             return odometry_type
         if "geometry_msgs/msg/PoseStamped" in normalized:
             return pose_stamped_type
+        self._unsupported_topic_type_count += 1
         return pose_stamped_type
 
     @staticmethod
@@ -420,8 +504,6 @@ class RclpyRos2Client(RosIngressClient):
             if not pid or pid in normalized:
                 continue
             normalized.append(pid)
-        if not normalized:
-            normalized.append("UAV1")
         return normalized
 
 

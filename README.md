@@ -111,6 +111,8 @@ PySide6 原型界面，用于无人机（UAV）与无人车（UGV）协同导航
   - ROS2 桥接适配器骨架与 mock 实时适配器
 - `ros2_client.py`
   - 真实 ROS2 入站客户端（`rclpy`）与 stub/in-memory 客户端
+- `ros_protocol.py`
+  - 冻结最小 ROS2 协议常量（topic/类型/平台ID/时间戳/health 枚举）
 - `ros_topic_mapping.py`
   - 约定 ROS topic 到 `PlatformState` 字段映射（pose/truth/health）
 - `alert_event.py`
@@ -185,11 +187,15 @@ python3 app.py --source ros2 --ros2-platform-ids UAV1,UGV1 --ros2-no-auto-discov
 
 # 调整自动发现扫描周期
 python3 app.py --source ros2 --ros2-discovery-interval 0.5
+
+# 收敛规则：最小激活消息数 / 平台上限 / 单次推送上限
+python3 app.py --source ros2 --ros2-min-messages-to-activate 2 --ros2-max-platforms 80 --ros2-max-updates-per-poll 40
 ```
 
 ### 4.1 ROS2 最小接入约定（单平台闭环）
 
 默认开启自动平台发现，不再强制手填 `--ros2-platform-ids`。
+冻结协议文档见：`docs/ros2_min_protocol.md`
 
 最小 topic（默认）：
 
@@ -284,6 +290,7 @@ python3 -m pytest -q
 - `tests/test_platform_state.py`
 - `tests/test_replay_data_source.py`
 - `tests/test_app_cli.py`
+- `tests/test_ros_protocol.py`
 - `tests/test_ros2_client.py`
 - `tests/test_ros_bridge_adapter.py`
 - `tests/test_ros_topic_mapping.py`

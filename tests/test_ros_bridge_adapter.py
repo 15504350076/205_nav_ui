@@ -124,7 +124,7 @@ def test_ros_bridge_adapter_status_contains_runtime_stats() -> None:
     assert adapter.connect()
     initial = adapter.get_status().message
     assert "platforms=0" in initial
-    assert "msgs=0" in initial
+    assert "recv=0" in initial
     adapter.on_pose_topic(
         "/swarm/UAV1/nav/pose",
         {"x": 1.0, "y": 2.0, "z": 3.0, "timestamp": 1.0, "type": "UAV"},
@@ -132,4 +132,118 @@ def test_ros_bridge_adapter_status_contains_runtime_stats() -> None:
     _ = adapter.poll()
     message = adapter.get_status().message
     assert "platforms=1" in message
-    assert "msgs=1" in message
+    assert "recv=1" in message
+
+
+def test_ros_bridge_adapter_drops_timestamp_rollback() -> None:
+    adapter = RosBridgeAdapter()
+    assert adapter.connect()
+    assert adapter.on_pose_topic(
+        "/swarm/UAV1/nav/pose",
+        {"x": 1.0, "y": 1.0, "z": 1.0, "timestamp": 10.0},
+    )
+    _ = adapter.poll()
+    assert (
+        adapter.on_pose_topic(
+            "/swarm/UAV1/nav/pose",
+            {"x": 2.0, "y": 2.0, "z": 2.0, "timestamp": 9.0},
+        )
+        is False
+    )
+    assert adapter.poll() == []
+    assert "invalid_ts=1" in adapter.get_status().message
+
+
+def test_ros_bridge_adapter_min_messages_to_activate() -> None:
+    adapter = RosBridgeAdapter(min_messages_to_activate=2)
+    assert adapter.connect()
+    assert adapter.on_pose_topic(
+        "/swarm/UAV1/nav/pose",
+        {"x": 1.0, "y": 1.0, "z": 1.0, "timestamp": 1.0},
+    )
+    assert adapter.poll() == []
+    assert adapter.on_pose_topic(
+        "/swarm/UAV1/nav/pose",
+        {"x": 1.1, "y": 1.1, "z": 1.1, "timestamp": 2.0},
+    )
+    updates = adapter.poll()
+    assert len(updates) == 1
+    assert updates[0].id == "UAV1"
+
+
+def test_ros_bridge_adapter_max_platform_protection() -> None:
+    adapter = RosBridgeAdapter(max_platforms=1)
+    assert adapter.connect()
+    assert adapter.on_pose_topic(
+        "/swarm/UAV1/nav/pose",
+        {"x": 1.0, "y": 1.0, "z": 1.0, "timestamp": 1.0},
+    )
+    _ = adapter.poll()
+    assert (
+        adapter.on_pose_topic(
+            "/swarm/UAV2/nav/pose",
+            {"x": 2.0, "y": 2.0, "z": 2.0, "timestamp": 1.0},
+        )
+        is False
+    )
+    assert "drop=1" in adapter.get_status().message
+
+
+def test_ros_bridge_adapter_limits_updates_per_poll() -> None:
+    adapter = RosBridgeAdapter(max_updates_per_poll=1)
+    assert adapter.connect()
+    assert adapter.on_pose_topic(
+        "/swarm/UAV1/nav/pose",
+        {"x": 1.0, "y": 1.0, "z": 1.0, "timestamp": 1.0},
+    )
+    assert adapter.on_pose_topic(
+        "/swarm/UGV1/nav/pose",
+        {"x": 2.0, "y": 2.0, "z": 0.0, "timestamp": 1.0},
+    )
+    first = adapter.poll()
+    second = adapter.poll()
+    assert len(first) == 1
+    assert len(second) == 1
+
+
+def test_ros_bridge_adapter_reports_no_data_timeout() -> None:
+    now = [0.0]
+    adapter = RosBridgeAdapter(clock=lambda: now[0], no_data_warn_sec=1.0)
+    assert adapter.connect()
+    adapter.on_pose_topic(
+        "/swarm/UAV1/nav/pose",
+        {"x": 1.0, "y": 2.0, "z": 3.0, "timestamp": 1.0},
+    )
+    _ = adapter.poll()
+    now[0] = 2.5
+    message = adapter.get_status().message
+    assert "last=stale" in message
+
+
+def test_ros_bridge_adapter_pose_truth_platform_mismatch_kept_separate() -> None:
+    adapter = RosBridgeAdapter()
+    assert adapter.connect()
+    adapter.on_pose_topic(
+        "/swarm/UAV1/nav/pose",
+        {"x": 1.0, "y": 1.0, "z": 1.0, "timestamp": 1.0},
+    )
+    adapter.on_truth_topic(
+        "/swarm/UAV2/truth/pose",
+        {"x": 1.1, "y": 1.1, "z": 1.0, "timestamp": 1.0},
+    )
+    updates = adapter.poll()
+    ids = sorted(item.id for item in updates)
+    assert ids == ["UAV1", "UAV2"]
+
+
+def test_ros_bridge_adapter_pose_only_without_truth_health() -> None:
+    adapter = RosBridgeAdapter()
+    assert adapter.connect()
+    assert adapter.on_pose_topic(
+        "/swarm/UAV1/nav/pose",
+        {"x": 5.0, "y": 6.0, "z": 7.0, "timestamp": 2.0},
+    )
+    updates = adapter.poll()
+    assert len(updates) == 1
+    assert updates[0].id == "UAV1"
+    assert updates[0].truth_x is None

@@ -88,6 +88,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="自动发现扫描周期（秒），默认 1.0",
     )
     parser.add_argument(
+        "--ros2-min-messages-to-activate",
+        type=int,
+        default=1,
+        help="平台最小激活消息数（达到后才推送到 UI），默认 1",
+    )
+    parser.add_argument(
+        "--ros2-max-platforms",
+        type=int,
+        default=120,
+        help="ROS2 接入平台上限保护，默认 120",
+    )
+    parser.add_argument(
+        "--ros2-max-updates-per-poll",
+        type=int,
+        default=80,
+        help="单次 poll 推送给 UI 的平台更新上限，默认 80",
+    )
+    parser.add_argument(
         "--ros2-pose-topic",
         default=None,
         help="ros2 估计位姿 topic（可选覆盖，支持模板或固定值）",
@@ -151,6 +169,9 @@ def build_data_source_from_args(args: argparse.Namespace):
             source_name=f"ROS2Bridge(Live:{','.join(ros2_platform_ids)})",
             topic_convention=topic_convention,
             ros_client=ros_client,
+            min_messages_to_activate=int(args.ros2_min_messages_to_activate),
+            max_platforms=int(args.ros2_max_platforms),
+            max_updates_per_poll=int(args.ros2_max_updates_per_poll),
         )
 
     replay_path = Path(args.replay_file)

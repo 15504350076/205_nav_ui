@@ -159,3 +159,13 @@ def test_payload_from_ros_odometry_like_message() -> None:
     assert payload["x"] == 4.0 and payload["y"] == 5.0 and payload["z"] == 6.0
     assert payload["vx"] == 0.3 and payload["vy"] == 0.4 and payload["vz"] == 0.0
     assert payload["speed"] == 0.5
+
+
+def test_payload_from_ros_health_message_with_garbled_or_empty_text() -> None:
+    payload = payload_from_ros_health_message("%%%乱码%%%")
+    assert payload["link_state"] == "UNKNOWN"
+    assert payload["is_online"] is True
+
+    payload_empty = payload_from_ros_health_message("")
+    assert payload_empty["link_state"] == "UNKNOWN"
+    assert payload_empty["is_online"] is True

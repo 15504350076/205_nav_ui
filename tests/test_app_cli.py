@@ -32,6 +32,24 @@ def test_parse_cli_args_ros2_disable_auto_discovery() -> None:
     assert args.ros2_auto_discovery is False
 
 
+def test_parse_cli_args_ros2_convergence_options() -> None:
+    args = parse_cli_args(
+        [
+            "--source",
+            "ros2",
+            "--ros2-min-messages-to-activate",
+            "2",
+            "--ros2-max-platforms",
+            "50",
+            "--ros2-max-updates-per-poll",
+            "20",
+        ]
+    )
+    assert args.ros2_min_messages_to_activate == 2
+    assert args.ros2_max_platforms == 50
+    assert args.ros2_max_updates_per_poll == 20
+
+
 def test_parse_cli_args_replay_requires_file() -> None:
     with pytest.raises(SystemExit):
         parse_cli_args(["--source", "replay"])
@@ -100,6 +118,9 @@ def test_build_data_source_ros2_unavailable(monkeypatch: pytest.MonkeyPatch) -> 
         ros2_node_name="nav_ui_bridge",
         ros2_auto_discovery=True,
         ros2_discovery_interval=1.0,
+        ros2_min_messages_to_activate=1,
+        ros2_max_platforms=120,
+        ros2_max_updates_per_poll=80,
         ros2_pose_topic=None,
         ros2_truth_topic=None,
         ros2_health_topic=None,
@@ -142,6 +163,9 @@ def test_build_data_source_ros2_available(monkeypatch: pytest.MonkeyPatch) -> No
         ros2_node_name="nav_ui_bridge",
         ros2_auto_discovery=True,
         ros2_discovery_interval=1.0,
+        ros2_min_messages_to_activate=1,
+        ros2_max_platforms=120,
+        ros2_max_updates_per_poll=80,
         ros2_pose_topic="/swarm/{platform_id}/nav/pose",
         ros2_truth_topic="/swarm/{platform_id}/truth/pose",
         ros2_health_topic="/swarm/{platform_id}/health",

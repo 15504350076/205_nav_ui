@@ -1,5 +1,6 @@
 import csv
 import json
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -149,6 +150,9 @@ class MainWindow(QMainWindow):
         self.playback_speed = 1.0
         self._is_loading_ui_state = False
         self._ui_state_ready = False
+        self._ui_tick_count = 0
+        self._ui_tick_window_start_sec = time.monotonic()
+        self._ui_tick_rate_hz = 0.0
         self.packet_loss_controls_supported = all(
             live_source is not None and hasattr(live_source, name)
             for name in ("set_packet_loss_enabled", "set_packet_loss_rate")
@@ -1054,6 +1058,7 @@ class MainWindow(QMainWindow):
         self._refresh_data_source_runtime_label()
 
     def on_timer_update(self) -> None:
+        self._mark_ui_tick()
         if self.data_source.is_replay_mode:
             self._advance_replay_frame(status_prefix="回放")
             self._refresh_data_source_runtime_label()
@@ -1105,9 +1110,24 @@ class MainWindow(QMainWindow):
             return
         status = self.data_source.get_status()
         detail = status.message.strip() if status.message else "no details"
-        self.source_status_label.setText(
-            f"数据源: {status.source_name} | {status.mode} | {detail}"
+        ui_platform_count = len(self.platform_manager.get_all_platforms())
+        ui_alert_count = self.alert_table.rowCount() if hasattr(self, "alert_table") else 0
+        ui_summary = (
+            f"ui(platforms={ui_platform_count},alerts={ui_alert_count},refresh_hz={self._ui_tick_rate_hz:.1f})"
         )
+        self.source_status_label.setText(
+            f"数据源: {status.source_name} | {status.mode} | {detail} | {ui_summary}"
+        )
+
+    def _mark_ui_tick(self) -> None:
+        self._ui_tick_count += 1
+        now = time.monotonic()
+        elapsed = now - self._ui_tick_window_start_sec
+        if elapsed < 1.0:
+            return
+        self._ui_tick_rate_hz = self._ui_tick_count / elapsed
+        self._ui_tick_count = 0
+        self._ui_tick_window_start_sec = now
 
     def on_platform_selected(self, platform_info: PlatformState, status_prefix: str = "") -> None:
         self.id_label.setText(str(platform_info.id))
