@@ -150,6 +150,7 @@ PySide6 原型界面，用于无人机（UAV）与无人车（UGV）协同导航
 ### 3.3 核心数据流
 
 - `fake/replay/mock_ros/ros2` 数据源 -> `DataAdapter`
+- `FusionService`（可选）对位置做预测+测量融合后再进入 UI 链路
 - `DataAdapter` 输出统一 `PlatformState`
 - `PlatformManager` 维护在线/超时/移除状态
 - `EvaluationService` 计算误差与 RMS
@@ -190,7 +191,17 @@ python3 app.py --source ros2 --ros2-discovery-interval 0.5
 
 # 收敛规则：最小激活消息数 / 平台上限 / 单次推送上限
 python3 app.py --source ros2 --ros2-min-messages-to-activate 2 --ros2-max-platforms 80 --ros2-max-updates-per-poll 40
+
+# 可选：启用独立融合模块（默认关闭）
+python3 app.py --source fake --enable-fusion --fusion-measurement-weight 0.7 --fusion-max-gap-sec 0.8
 ```
+
+融合参数说明：
+
+- `--enable-fusion`：启用独立融合模块（不改 UI 代码）
+- `--fusion-measurement-weight`：0~1，越大越信任输入测量
+- `--fusion-max-gap-sec`：预测允许的最大时间间隔
+- `--fusion-truth-weight`：联调辅助参数，默认 `0.0`（生产可保持为 0）
 
 ### 4.1 ROS2 最小接入约定（单平台闭环）
 

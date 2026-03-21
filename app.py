@@ -8,6 +8,8 @@ from typing import Sequence
 from PySide6.QtWidgets import QApplication
 
 from fake_data import FakeDataGenerator
+from fusion_service import FusionConfig
+from fused_data_source import FusedDataAdapter, FusedPlatformDataSource
 from main_window import MainWindow
 from replay_data_source import ReplayDataSource
 from ros2_client import RclpyRos2Client
@@ -120,6 +122,30 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="ros2 健康状态 topic（可选覆盖，支持模板或固定值）",
     )
+    parser.add_argument(
+        "--enable-fusion",
+        action="store_true",
+        default=False,
+        help="启用位置融合算法模块（默认关闭）",
+    )
+    parser.add_argument(
+        "--fusion-measurement-weight",
+        type=float,
+        default=0.8,
+        help="融合参数：测量权重 0~1，越大越信任输入位置，默认 0.8",
+    )
+    parser.add_argument(
+        "--fusion-max-gap-sec",
+        type=float,
+        default=1.0,
+        help="融合参数：预测允许的最大时间间隔（秒），默认 1.0",
+    )
+    parser.add_argument(
+        "--fusion-truth-weight",
+        type=float,
+        default=0.0,
+        help="融合参数：真值辅助权重 0~1（联调用，可保持 0），默认 0.0",
+    )
     return parser
 
 
@@ -131,16 +157,39 @@ def parse_cli_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return args
 
 
+def _build_fusion_config(args: argparse.Namespace) -> FusionConfig:
+    return FusionConfig(
+        measurement_weight=float(getattr(args, "fusion_measurement_weight", 0.8)),
+        max_prediction_gap_sec=float(getattr(args, "fusion_max_gap_sec", 1.0)),
+        truth_weight=float(getattr(args, "fusion_truth_weight", 0.0)),
+    )
+
+
+def _maybe_wrap_with_fusion(source: object, args: argparse.Namespace):
+    if not bool(getattr(args, "enable_fusion", False)):
+        return source
+    fusion_config = _build_fusion_config(args)
+    if all(hasattr(source, name) for name in ("get_initial_data", "get_next_frame")):
+        return FusedPlatformDataSource(source, fusion_config=fusion_config)  # type: ignore[arg-type]
+    if all(
+        hasattr(source, name)
+        for name in ("connect", "disconnect", "poll", "next_frame", "is_live", "get_status")
+    ):
+        return FusedDataAdapter(source, fusion_config=fusion_config)  # type: ignore[arg-type]
+    return source
+
+
 def build_data_source_from_args(args: argparse.Namespace):
     if args.source == "fake":
-        return FakeDataGenerator()
+        return _maybe_wrap_with_fusion(FakeDataGenerator(), args)
 
     if args.source == "mock_ros":
-        return MockRosLiveAdapter(
+        source = MockRosLiveAdapter(
             platform_ids=_parse_platform_ids(args.mock_ros_ids, DEFAULT_MOCK_ROS_IDS),
             interval_sec=max(0.02, float(args.mock_ros_interval)),
             seed=int(args.mock_ros_seed),
         )
+        return _maybe_wrap_with_fusion(source, args)
 
     if args.source == "ros2":
         ros2_platform_ids = (
@@ -166,7 +215,7 @@ def build_data_source_from_args(args: argparse.Namespace):
             raise ValueError(
                 f"{ros_client.get_status_message()}。可先使用 --source mock_ros 继续联调。"
             )
-        return RosBridgeAdapter(
+        source = RosBridgeAdapter(
             source_name=f"ROS2Bridge(Live:{','.join(ros2_platform_ids)})",
             topic_convention=topic_convention,
             ros_client=ros_client,
@@ -174,12 +223,13 @@ def build_data_source_from_args(args: argparse.Namespace):
             max_platforms=int(args.ros2_max_platforms),
             max_updates_per_poll=int(args.ros2_max_updates_per_poll),
         )
+        return _maybe_wrap_with_fusion(source, args)
 
     replay_path = Path(args.replay_file)
     replay_source = ReplayDataSource(FakeDataGenerator())
     if not replay_source.load_replay_jsonl(replay_path):
         raise ValueError(f"Failed to load replay file: {replay_path}")
-    return replay_source
+    return _maybe_wrap_with_fusion(replay_source, args)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
