@@ -1,3 +1,5 @@
+"""平台图元模块：定义 UAV/UGV 图元及选中、灰显等样式行为。"""
+
 from typing import Callable, Optional
 
 from PySide6.QtCore import Qt, QRectF

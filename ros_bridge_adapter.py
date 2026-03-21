@@ -1,3 +1,5 @@
+"""ROS2 桥接适配模块：将入站消息转换为 PlatformState 并做收敛控制。"""
+
 from __future__ import annotations
 
 import math
@@ -333,6 +335,7 @@ class RosBridgeAdapter(DataAdapter):
     ) -> bool:
         next_timestamp = self._payload_timestamp(payload, fallback_timestamp)
         last_timestamp = self._latest_timestamp_by_platform_id.get(platform_id, fallback_timestamp)
+        # 时间戳回退直接丢弃，避免轨迹倒退、误差统计抖动和告警误触发。
         return next_timestamp + 1e-9 < last_timestamp
 
     def _payload_timestamp(self, payload: dict, fallback_timestamp: float) -> float:
@@ -358,6 +361,7 @@ class RosBridgeAdapter(DataAdapter):
     def _mark_platform_dirty_if_activated(self, platform_id: str) -> None:
         message_count = self._message_count_by_platform_id.get(platform_id, 0) + 1
         self._message_count_by_platform_id[platform_id] = message_count
+        # 新平台达到最小消息数后再进入 UI，降低动态发现初期的抖动噪声。
         if platform_id in self._active_platform_ids or message_count >= self.min_messages_to_activate:
             self._active_platform_ids.add(platform_id)
             self._dirty_platform_ids.add(platform_id)
@@ -389,6 +393,7 @@ class RosBridgeAdapter(DataAdapter):
             + sorted_platform_ids[: self._flush_round_robin_offset]
         )
         selected_platform_ids = rotated_platform_ids[: self.max_updates_per_poll]
+        # 轮转输出 + 单次上限，保证高频平台不会长期饿死低频平台。
         updates = [
             self._platform_states[platform_id]
             for platform_id in selected_platform_ids

@@ -1,3 +1,5 @@
+"""单元测试模块：覆盖 main_window_integration 相关逻辑与边界行为。"""
+
 import json
 import os
 from pathlib import Path

@@ -1,3 +1,5 @@
+"""平台状态管理模块：维护在线状态、超时判定与下线移除。"""
+
 from platform_state import PlatformState
 
 

@@ -1,3 +1,5 @@
+"""单元测试模块：覆盖 evaluation_service 相关逻辑与边界行为。"""
+
 from evaluation_service import (
     EvaluationService,
     compute_planar_error_from_state,

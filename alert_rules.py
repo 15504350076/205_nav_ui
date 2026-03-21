@@ -1,3 +1,5 @@
+"""告警规则模块：阈值配置、预设、版本化读写与差异比较。"""
+
 from __future__ import annotations
 
 import json

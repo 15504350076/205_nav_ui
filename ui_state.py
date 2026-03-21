@@ -1,3 +1,5 @@
+"""UI 状态持久化模块：筛选/排序/显示开关等界面状态存取。"""
+
 from __future__ import annotations
 
 import json

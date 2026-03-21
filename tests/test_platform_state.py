@@ -1,3 +1,5 @@
+"""单元测试模块：覆盖 platform_state 相关逻辑与边界行为。"""
+
 from platform_state import PlatformState
 
 

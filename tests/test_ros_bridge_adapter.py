@@ -1,3 +1,5 @@
+"""单元测试模块：覆盖 ros_bridge_adapter 相关逻辑与边界行为。"""
+
 from ros2_client import InMemoryRos2Client
 from ros_bridge_adapter import MockRosLiveAdapter, MockStreamConfig, RosBridgeAdapter
 

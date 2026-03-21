@@ -1,3 +1,5 @@
+"""主窗口编排模块：负责 UI 控件联动、状态展示与业务调用。"""
+
 import csv
 import json
 import time
@@ -1132,6 +1134,7 @@ class MainWindow(QMainWindow):
         self.source_status_label.setText(
             f"数据源: {status.source_name} | {status.mode} | {detail} | {ui_summary}"
         )
+        # 位置监视器和运行标签同频刷新，便于现场联调时对照判断。
         self._refresh_motion_monitor_label()
 
     def _get_runtime_counter_snapshot(self) -> dict[str, float]:
@@ -1230,6 +1233,7 @@ class MainWindow(QMainWindow):
             motion_hint = f"平台[{platform_id}]未激活"
             monitor_level = "neutral"
 
+        # 颜色只表达联调诊断等级，不参与业务判定逻辑。
         level_label, style = self._motion_monitor_style_for_level(monitor_level)
         self.motion_monitor_label.setStyleSheet(style)
         self.motion_monitor_label.setText(

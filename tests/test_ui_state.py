@@ -1,3 +1,5 @@
+"""单元测试模块：覆盖 ui_state 相关逻辑与边界行为。"""
+
 from pathlib import Path
 
 from ui_state import UiState, load_ui_state, save_ui_state

@@ -1,3 +1,5 @@
+"""误差曲线绘图模块：展示选中平台误差时间序列。"""
+
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QWidget

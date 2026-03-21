@@ -1,3 +1,5 @@
+"""假数据生成模块：提供 UAV/UGV 轨迹、真值与扰动估计数据。"""
+
 import math
 import random
 

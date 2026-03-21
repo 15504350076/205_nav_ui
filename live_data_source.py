@@ -1,3 +1,5 @@
+"""实时数据源适配模块：把 PlatformDataSource 适配为 DataAdapter。"""
+
 from __future__ import annotations
 
 from data_adapter import AdapterStatus, DataAdapter

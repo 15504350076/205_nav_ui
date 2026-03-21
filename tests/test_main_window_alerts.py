@@ -1,3 +1,5 @@
+"""单元测试模块：覆盖 main_window_alerts 相关逻辑与边界行为。"""
+
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")

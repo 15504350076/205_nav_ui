@@ -1,3 +1,5 @@
+"""运行态告警引擎模块：根据状态变化触发超时/恢复/误差等告警。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

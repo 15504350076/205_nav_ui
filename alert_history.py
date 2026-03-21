@@ -1,3 +1,5 @@
+"""告警历史模型模块：历史记录结构与序列化辅助。"""
+
 from __future__ import annotations
 
 import json

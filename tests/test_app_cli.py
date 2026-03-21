@@ -1,3 +1,5 @@
+"""单元测试模块：覆盖 app_cli 相关逻辑与边界行为。"""
+
 from __future__ import annotations
 
 import json

@@ -1,3 +1,5 @@
+"""ROS2 入站客户端模块：订阅、自动发现与原始消息入站统计。"""
+
 from __future__ import annotations
 
 from collections import deque

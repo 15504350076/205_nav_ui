@@ -1,3 +1,5 @@
+"""应用启动入口：解析命令行并按参数构建数据源，启动主窗口。"""
+
 from __future__ import annotations
 
 import argparse
@@ -169,6 +171,8 @@ def _maybe_wrap_with_fusion(source: object, args: argparse.Namespace):
     if not bool(getattr(args, "enable_fusion", False)):
         return source
     fusion_config = _build_fusion_config(args)
+    # 先尝试按 PlatformDataSource 包装（fake 等实时源），
+    # 再按 DataAdapter 包装（ros2/mock/replay 适配器）。
     if all(hasattr(source, name) for name in ("get_initial_data", "get_next_frame")):
         return FusedPlatformDataSource(source, fusion_config=fusion_config)  # type: ignore[arg-type]
     if all(
@@ -215,6 +219,7 @@ def build_data_source_from_args(args: argparse.Namespace):
             raise ValueError(
                 f"{ros_client.get_status_message()}。可先使用 --source mock_ros 继续联调。"
             )
+        # UI 不直接碰 ROS API：统一收敛到 RosBridgeAdapter，再按需叠加融合层。
         source = RosBridgeAdapter(
             source_name=f"ROS2Bridge(Live:{','.join(ros2_platform_ids)})",
             topic_convention=topic_convention,

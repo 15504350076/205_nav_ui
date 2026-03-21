@@ -1,3 +1,5 @@
+"""录制与回放模块：在实时源上叠加 JSONL 录制和回放游标控制。"""
+
 from __future__ import annotations
 
 import json
@@ -74,6 +76,7 @@ class ReplayDataSource(ReplayDataAdapter):
 
     def poll(self) -> list[PlatformState]:
         if self.is_replay_mode:
+            # 回放模式下只从离线帧游标读取，不访问实时源。
             if self._replay_index >= len(self._replay_frames):
                 return []
             frame = self._replay_frames[self._replay_index]
@@ -82,6 +85,7 @@ class ReplayDataSource(ReplayDataAdapter):
 
         frame = self.live_adapter.poll()
         if self._recording and frame:
+            # 仅记录非空帧，避免产生大量空行回放数据。
             self._recorded_frames.append(list(frame))
         return frame
 
@@ -154,6 +158,7 @@ class ReplayDataSource(ReplayDataAdapter):
                         state = PlatformState.from_dict(item)
                         if state is not None:
                             frame_states.append(state)
+                    # 单帧里全是非法条目时直接跳过，保持回放链路稳健。
                     if not frame_states:
                         continue
                     loaded_frames.append(frame_states)

@@ -1,3 +1,5 @@
+"""评估模块：计算平面误差、RMS 与误差历史序列。"""
+
 from __future__ import annotations
 
 import math

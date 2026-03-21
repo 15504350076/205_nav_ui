@@ -1,3 +1,5 @@
+"""数据源协议模块：定义实时源与回放能力的接口约束。"""
+
 from pathlib import Path
 from typing import Protocol
 

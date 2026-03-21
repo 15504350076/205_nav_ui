@@ -1,3 +1,5 @@
+"""单元测试模块：覆盖 ros2_client 相关逻辑与边界行为。"""
+
 from __future__ import annotations
 
 from ros2_client import InMemoryRos2Client, NullRos2Client, RclpyRos2Client

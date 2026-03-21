@@ -1,3 +1,5 @@
+"""告警事件模型模块：定义运行态告警事件与基础字段。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

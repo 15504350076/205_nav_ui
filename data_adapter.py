@@ -1,3 +1,5 @@
+"""数据适配器协议模块：统一实时/回放数据适配器接口。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

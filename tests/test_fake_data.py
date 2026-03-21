@@ -1,3 +1,5 @@
+"""单元测试模块：覆盖 fake_data 相关逻辑与边界行为。"""
+
 from fake_data import FakeDataGenerator
 
 

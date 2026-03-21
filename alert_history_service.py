@@ -1,3 +1,5 @@
+"""告警历史服务模块：历史快照保存、加载、导出与清理。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

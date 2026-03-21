@@ -1,3 +1,5 @@
+"""告警中心逻辑模块：告警筛选判定与来源分组统计。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

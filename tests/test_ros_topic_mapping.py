@@ -1,3 +1,5 @@
+"""单元测试模块：覆盖 ros_topic_mapping 相关逻辑与边界行为。"""
+
 from platform_state import PlatformState
 from ros_topic_mapping import (
     RosTopicConvention,

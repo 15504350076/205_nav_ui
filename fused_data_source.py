@@ -1,3 +1,5 @@
+"""融合包装模块：为数据源/适配器按需叠加融合能力。"""
+
 from __future__ import annotations
 
 from data_adapter import AdapterStatus, DataAdapter
@@ -22,6 +24,7 @@ class FusedPlatformDataSource(PlatformDataSource):
         return getattr(self.source, name)
 
     def get_initial_data(self) -> list[PlatformState]:
+        # 切换源/重连后先清空历史，避免把旧平台状态带入新会话。
         self.fusion_service.reset()
         return self.fusion_service.fuse_frame(self.source.get_initial_data())
 
@@ -47,6 +50,7 @@ class FusedDataAdapter(DataAdapter):
     def connect(self) -> bool:
         ok = self.adapter.connect()
         if ok:
+            # 连接成功后重置融合历史，保证首帧从干净状态开始。
             self.fusion_service.reset()
         return ok
 

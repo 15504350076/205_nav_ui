@@ -1,3 +1,5 @@
+"""融合算法模块：对位置测量与运动预测进行加权融合。"""
+
 from __future__ import annotations
 
 import math
@@ -41,9 +43,11 @@ class PositionFusionService:
         if prev is not None:
             dt = float(state.timestamp) - float(prev.timestamp)
             if dt > 0.0 and dt <= max(0.05, float(self.config.max_prediction_gap_sec)):
+                # 预测项：使用当前帧速度 + 上一帧融合位置做一步前向预测。
                 predicted_x = float(prev.x) + float(state.vx) * dt
                 predicted_y = float(prev.y) + float(state.vy) * dt
                 predicted_z = float(prev.z) + float(state.vz) * dt
+                # 融合项：测量和预测做线性加权，权重由 CLI 参数控制。
                 w = _clamp_ratio(self.config.measurement_weight)
                 fused_x = w * fused_x + (1.0 - w) * predicted_x
                 fused_y = w * fused_y + (1.0 - w) * predicted_y
@@ -51,6 +55,7 @@ class PositionFusionService:
 
         truth_w = _clamp_ratio(self.config.truth_weight)
         if truth_w > 0.0:
+            # 真值辅助仅用于联调观察，默认 0，不会影响常规链路。
             if state.truth_x is not None:
                 fused_x = (1.0 - truth_w) * fused_x + truth_w * float(state.truth_x)
             if state.truth_y is not None:

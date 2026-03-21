@@ -1,3 +1,5 @@
+"""单元测试模块：覆盖 live_data_source 相关逻辑与边界行为。"""
+
 from live_data_source import LiveDataSourceAdapter
 from platform_state import PlatformState
 

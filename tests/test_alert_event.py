@@ -1,3 +1,5 @@
+"""单元测试模块：覆盖 alert_event 相关逻辑与边界行为。"""
+
 from alert_event import AlertEvent
 
 

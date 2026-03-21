@@ -1,3 +1,5 @@
+"""ROS topic 映射模块：把 ROS 消息规范化到内部字段。"""
+
 from __future__ import annotations
 
 import json
@@ -204,6 +206,7 @@ def payload_from_ros_health_message(
                     not in {HEALTH_STATE_LOST, HEALTH_STATE_OFFLINE, HEALTH_STATE_DISCONNECTED},
                     "link_state": normalized,
                     "nav_state": None,
+                    # health 文本通常无可靠时间戳，交给下游沿用 pose/truth 时间。
                     "timestamp": None,
                 }
             if isinstance(raw_json, dict):
@@ -222,6 +225,7 @@ def payload_from_ros_health_message(
                     "is_online": resolved_is_online,
                     "link_state": normalized_state,
                     "nav_state": _as_str(raw_json.get("nav_state"), None),
+                    # 仅在 health 明确给出 timestamp 时才写入，避免时钟域混淆。
                     "timestamp": (
                         _as_float(raw_timestamp, default_timestamp)
                         if raw_timestamp is not None

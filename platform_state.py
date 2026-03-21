@@ -1,3 +1,5 @@
+"""统一平台数据模型：定义平台状态字段及序列化转换。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

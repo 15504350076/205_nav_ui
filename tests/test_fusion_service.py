@@ -1,3 +1,5 @@
+"""单元测试模块：覆盖 fusion_service 相关逻辑与边界行为。"""
+
 from __future__ import annotations
 
 from data_adapter import AdapterStatus

@@ -1,3 +1,5 @@
+"""ROS2 最小协议模块：topic 约定、健康枚举与协议常量定义。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

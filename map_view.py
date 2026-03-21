@@ -1,3 +1,5 @@
+"""地图视图模块：负责平台图元、轨迹、真值层与缩放交互渲染。"""
+
 import math
 from typing import Callable
 

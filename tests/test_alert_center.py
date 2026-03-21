@@ -1,3 +1,5 @@
+"""单元测试模块：覆盖 alert_center 相关逻辑与边界行为。"""
+
 from alert_center import AlertRow, should_show_alert, summarize_alert_rows
 
 
