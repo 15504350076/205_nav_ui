@@ -1109,7 +1109,12 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "source_status_label"):
             return
         status = self.data_source.get_status()
-        detail = status.message.strip() if status.message else "no details"
+        runtime_detail = ""
+        if hasattr(self.data_source, "get_runtime_summary_text"):
+            getter = getattr(self.data_source, "get_runtime_summary_text")
+            if callable(getter):
+                runtime_detail = str(getter()).strip()
+        detail = runtime_detail or (status.message.strip() if status.message else "no details")
         ui_platform_count = len(self.platform_manager.get_all_platforms())
         ui_alert_count = self.alert_table.rowCount() if hasattr(self, "alert_table") else 0
         ui_summary = (

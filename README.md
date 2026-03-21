@@ -2,7 +2,7 @@
 
 PySide6 原型界面，用于无人机（UAV）与无人车（UGV）协同导航定位显示。
 
-当前阶段在保持 GUI 与状态管理稳定迭代的同时，已打通 ROS2 最小接入闭环（pose/truth/health），并支持按平台列表订阅。
+当前阶段在保持 GUI 与状态管理稳定迭代的同时，已打通 ROS2 最小接入闭环（pose/truth/health），并支持动态平台发现与收敛保护。
 
 ## 0. 当前阶段说明
 
@@ -196,6 +196,7 @@ python3 app.py --source ros2 --ros2-min-messages-to-activate 2 --ros2-max-platfo
 
 默认开启自动平台发现，不再强制手填 `--ros2-platform-ids`。
 冻结协议文档见：`docs/ros2_min_protocol.md`
+协议变更门槛：`.github/PULL_REQUEST_TEMPLATE.md`
 
 最小 topic（默认）：
 
@@ -206,7 +207,9 @@ python3 app.py --source ros2 --ros2-min-messages-to-activate 2 --ros2-max-platfo
 说明：
 
 - `pose/truth` 同时兼容 `geometry_msgs/PoseStamped` 与 `nav_msgs/Odometry`
-- 界面“录制与回放”区域会显示数据源运行状态（订阅平台数、消息计数、最近数据时延）
+- 运行状态分层显示：
+- `runtime`（长期运行指标）：活动平台数、最近消息时延
+- `debug`（联调指标）：接收计数、丢弃计数、时间戳回退计数、降级计数
 
 内部字段映射：
 
@@ -225,6 +228,9 @@ python3 app.py --source ros2 --ros2-min-messages-to-activate 2 --ros2-max-platfo
 已提供最小闭环发布脚本：
 
 - `scripts/ros2_demo_publishers.sh`
+- `scripts/ros2_multi_demo_publishers.sh`
+- `scripts/ros2_topic_check.sh`
+- `scripts/ros2_real_rehearsal.sh`
 
 使用方式：
 
@@ -237,6 +243,15 @@ python3 app.py --source ros2 --ros2-platform-ids UAV1,UAV2,UGV1
 
 # 终端2：启动最小topic发布（默认 UAV1）
 ./scripts/ros2_demo_publishers.sh UAV1
+
+# 多平台最小联调（2~3 平台）
+./scripts/ros2_multi_demo_publishers.sh UAV1,UAV2,UGV1
+
+# 协议 topic/type 检查
+./scripts/ros2_topic_check.sh UAV1
+
+# 真实联调最小演练助手（单平台）
+./scripts/ros2_real_rehearsal.sh UAV1
 ```
 
 脚本会持续发布：
@@ -291,6 +306,7 @@ python3 -m pytest -q
 - `tests/test_replay_data_source.py`
 - `tests/test_app_cli.py`
 - `tests/test_ros_protocol.py`
+- `tests/test_ros_protocol_sync.py`
 - `tests/test_ros2_client.py`
 - `tests/test_ros_bridge_adapter.py`
 - `tests/test_ros_topic_mapping.py`

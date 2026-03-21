@@ -1,6 +1,13 @@
-# ROS2 最小接入协议（冻结版 v1）
+# ROS2 最小接入协议（冻结版）
 
 本协议用于 `205_nav_ui` 的最小真实接入闭环，目标是保证车/机/真值/告警链路不漂移。
+
+## 0. 协议版本与指纹
+
+- 协议版本：`v1.0.0`
+- 协议指纹：`pose:/swarm/{platform_id}/nav/pose|truth:/swarm/{platform_id}/truth/pose|health:/swarm/{platform_id}/health|pose_types:geometry_msgs/msg/PoseStamped,nav_msgs/msg/Odometry|truth_types:geometry_msgs/msg/PoseStamped,nav_msgs/msg/Odometry|health_types:std_msgs/msg/String|platform_id:topic>payload|timestamp:header>payload>local|health:OK,TRACKING,DEGRADED,LOST,OFFLINE,DISCONNECTED,UNKNOWN`
+
+以上两项与 `ros_protocol.py` 保持一致，作为协议变更门槛。
 
 ## 1. 最小必需 Topic
 
@@ -74,3 +81,21 @@
 - ROS2 接入层：原始消息计数、最近消息时延、解析失败计数、类型不匹配计数
 - 适配/状态层：成功写入次数、丢弃计数、时间回退计数、降级计数
 - UI 层：当前展示平台数、告警数、刷新频率
+
+## 10. 协议变更门槛（必须遵守）
+
+以下任何变化，都视为协议变更：
+
+- 新增 topic
+- 新增支持消息类型
+- 平台 ID 提取规则变化
+- 时间戳优先级变化
+- health 枚举变化
+- 降级/丢弃策略变化
+
+协议变更必须同时满足：
+
+- 同步更新 `ros_protocol.py`
+- 同步更新本文档（版本/指纹/规则）
+- 同步补充测试（至少覆盖新增规则与兼容性）
+- 在 PR 说明中写明“是否兼容旧数据源/旧录制文件”

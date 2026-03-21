@@ -206,6 +206,19 @@ def test_ros_bridge_adapter_limits_updates_per_poll() -> None:
     assert len(second) == 1
 
 
+def test_ros_bridge_adapter_round_robin_prevents_starvation() -> None:
+    adapter = RosBridgeAdapter(max_updates_per_poll=1)
+    assert adapter.connect()
+    adapter.on_pose_topic("/swarm/A/nav/pose", {"x": 0.0, "y": 0.0, "z": 0.0, "timestamp": 1.0})
+    adapter.on_pose_topic("/swarm/Z/nav/pose", {"x": 1.0, "y": 1.0, "z": 0.0, "timestamp": 1.0})
+    first = adapter.poll()
+    # 高频 A 再次写入，验证 Z 不会被长期饿死
+    adapter.on_pose_topic("/swarm/A/nav/pose", {"x": 0.1, "y": 0.1, "z": 0.0, "timestamp": 2.0})
+    second = adapter.poll()
+    ids = {first[0].id, second[0].id}
+    assert ids == {"A", "Z"}
+
+
 def test_ros_bridge_adapter_reports_no_data_timeout() -> None:
     now = [0.0]
     adapter = RosBridgeAdapter(clock=lambda: now[0], no_data_warn_sec=1.0)

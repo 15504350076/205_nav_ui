@@ -3,12 +3,16 @@ from ros_protocol import (
     HEALTH_STATE_DEGRADED,
     HEALTH_STATE_OK,
     HEALTH_STATE_UNKNOWN,
+    ROS_PROTOCOL_FINGERPRINT,
+    ROS_PROTOCOL_VERSION,
     normalize_health_state,
 )
 
 
 def test_ros_protocol_spec_defaults() -> None:
     spec = RosProtocolSpec()
+    assert spec.version == ROS_PROTOCOL_VERSION
+    assert spec.fingerprint == ROS_PROTOCOL_FINGERPRINT
     assert spec.pose_topic_template.startswith("/swarm/")
     assert "geometry_msgs/msg/PoseStamped" in spec.pose_msg_types
     assert "nav_msgs/msg/Odometry" in spec.truth_msg_types

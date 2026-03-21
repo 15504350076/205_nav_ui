@@ -74,6 +74,7 @@ class RosBridgeAdapter(DataAdapter):
         self._dropped_message_count = 0
         self._invalid_timestamp_count = 0
         self._degraded_field_count = 0
+        self._flush_round_robin_offset = 0
 
     def connect(self) -> bool:
         if self._ros_client is not None:
@@ -109,30 +110,41 @@ class RosBridgeAdapter(DataAdapter):
 
     def get_status(self) -> AdapterStatus:
         mode = "live" if self._connected else "disconnected"
-        message_stats = self._build_message_stats()
+        runtime_summary = self._build_runtime_summary()
+        debug_summary = self._build_debug_summary()
         ingress_stats = self._build_ingress_metrics_summary()
         if self._ros_client is not None:
             message = self._ros_client.get_status_message()
-            if self._mock_enabled:
-                message = f"{message}; mock stream active"
             if ingress_stats:
                 message = f"{message}; {ingress_stats}"
-            if message_stats:
-                message = f"{message}; {message_stats}"
+            if runtime_summary:
+                message = f"{message}; {runtime_summary}"
+            if debug_summary:
+                message = f"{message}; {debug_summary}"
         elif self._mock_enabled:
             message = "mock stream active" if self._connected else "mock stream idle"
-            if message_stats:
-                message = f"{message}; {message_stats}"
+            if runtime_summary:
+                message = f"{message}; {runtime_summary}"
+            if debug_summary:
+                message = f"{message}; {debug_summary}"
         else:
             message = "awaiting ROS2 subscriptions" if self._connected else "adapter idle"
-            if message_stats:
-                message = f"{message}; {message_stats}"
+            if runtime_summary:
+                message = f"{message}; {runtime_summary}"
+            if debug_summary:
+                message = f"{message}; {debug_summary}"
         return AdapterStatus(
             connected=self._connected,
             mode=mode,
             source_name=self.source_name,
             message=message,
         )
+
+    def get_runtime_summary_text(self) -> str:
+        return self._build_runtime_summary()
+
+    def get_debug_summary_text(self) -> str:
+        return self._build_debug_summary()
 
     @property
     def ros_runtime_available(self) -> bool:
@@ -246,7 +258,7 @@ class RosBridgeAdapter(DataAdapter):
         self._received_message_count += 1
         self._last_message_monotonic_sec = self._clock()
 
-    def _build_message_stats(self) -> str:
+    def _build_runtime_summary(self) -> str:
         platform_count = len(self._platform_states)
         active_count = len(self._active_platform_ids)
         if self._last_message_monotonic_sec is None:
@@ -257,12 +269,14 @@ class RosBridgeAdapter(DataAdapter):
                 freshness = f"last=stale({age_sec:.1f}s)"
             else:
                 freshness = f"last={age_sec:.1f}s"
+        return f"runtime(platforms={platform_count},active={active_count},{freshness})"
+
+    def _build_debug_summary(self) -> str:
         return (
-            "state("
-            f"platforms={platform_count},active={active_count},recv={self._received_message_count},"
-            f"accepted={self._accepted_state_update_count},drop={self._dropped_message_count},"
-            f"invalid_ts={self._invalid_timestamp_count},degraded={self._degraded_field_count},"
-            f"{freshness})"
+            "debug("
+            f"recv={self._received_message_count},accepted={self._accepted_state_update_count},"
+            f"drop={self._dropped_message_count},invalid_ts={self._invalid_timestamp_count},"
+            f"degraded={self._degraded_field_count})"
         )
 
     def _build_ingress_metrics_summary(self) -> str:
@@ -338,7 +352,14 @@ class RosBridgeAdapter(DataAdapter):
         if not self._dirty_platform_ids:
             return []
         sorted_platform_ids = sorted(self._dirty_platform_ids)
-        selected_platform_ids = sorted_platform_ids[: self.max_updates_per_poll]
+        total = len(sorted_platform_ids)
+        if self._flush_round_robin_offset >= total:
+            self._flush_round_robin_offset = 0
+        rotated_platform_ids = (
+            sorted_platform_ids[self._flush_round_robin_offset :]
+            + sorted_platform_ids[: self._flush_round_robin_offset]
+        )
+        selected_platform_ids = rotated_platform_ids[: self.max_updates_per_poll]
         updates = [
             self._platform_states[platform_id]
             for platform_id in selected_platform_ids
@@ -346,6 +367,10 @@ class RosBridgeAdapter(DataAdapter):
         ]
         for platform_id in selected_platform_ids:
             self._dirty_platform_ids.discard(platform_id)
+        if total > 0:
+            self._flush_round_robin_offset = (
+                self._flush_round_robin_offset + len(selected_platform_ids)
+            ) % total
         return updates
 
     def _emit_mock_tick(self) -> None:

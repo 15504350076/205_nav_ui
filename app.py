@@ -160,6 +160,7 @@ def build_data_source_from_args(args: argparse.Namespace):
             node_name=str(args.ros2_node_name),
             auto_discovery=bool(args.ros2_auto_discovery),
             discovery_interval_sec=float(args.ros2_discovery_interval),
+            max_discovered_platforms=int(args.ros2_max_platforms),
         )
         if not ros_client.is_available():
             raise ValueError(

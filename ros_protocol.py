@@ -3,6 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
+ROS_PROTOCOL_VERSION: Final[str] = "v1.0.0"
+ROS_PROTOCOL_FINGERPRINT: Final[str] = (
+    "pose:/swarm/{platform_id}/nav/pose|truth:/swarm/{platform_id}/truth/pose|"
+    "health:/swarm/{platform_id}/health|"
+    "pose_types:geometry_msgs/msg/PoseStamped,nav_msgs/msg/Odometry|"
+    "truth_types:geometry_msgs/msg/PoseStamped,nav_msgs/msg/Odometry|"
+    "health_types:std_msgs/msg/String|"
+    "platform_id:topic>payload|timestamp:header>payload>local|health:OK,TRACKING,DEGRADED,LOST,OFFLINE,DISCONNECTED,UNKNOWN"
+)
+
 
 DEFAULT_POSE_TOPIC_TEMPLATE: Final[str] = "/swarm/{platform_id}/nav/pose"
 DEFAULT_TRUTH_TOPIC_TEMPLATE: Final[str] = "/swarm/{platform_id}/truth/pose"
@@ -57,6 +67,8 @@ NO_DATA_WARN_SEC_DEFAULT: Final[float] = 2.0
 
 @dataclass(slots=True, frozen=True)
 class RosProtocolSpec:
+    version: str = ROS_PROTOCOL_VERSION
+    fingerprint: str = ROS_PROTOCOL_FINGERPRINT
     pose_topic_template: str = DEFAULT_POSE_TOPIC_TEMPLATE
     truth_topic_template: str = DEFAULT_TRUTH_TOPIC_TEMPLATE
     health_topic_template: str = DEFAULT_HEALTH_TOPIC_TEMPLATE

@@ -175,3 +175,4 @@ def test_build_data_source_ros2_available(monkeypatch: pytest.MonkeyPatch) -> No
     assert captured["platform_ids"] == ["UAV9", "UGV9"]
     assert captured["auto_discovery"] is True
     assert captured["discovery_interval_sec"] == 1.0
+    assert captured["max_discovered_platforms"] == 120
